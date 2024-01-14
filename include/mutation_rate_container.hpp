@@ -1,7 +1,6 @@
 #ifndef MUTATION_RATE_CONTAINER_HPP
 #define MUTATION_RATE_CONTAINER_HPP
 
-#include "math.hpp"
 #include <iostream>
 
 struct mutation_rate_container {
