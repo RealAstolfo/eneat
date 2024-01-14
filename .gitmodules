@@ -1,0 +1,9 @@
+[submodule "vendors/emath"]
+	path = vendors/emath
+	url = git@github.com:RealAstolfo/emath.git
+[submodule "vendors/ethreads"]
+	path = vendors/ethreads
+	url = git@github.com:RealAstolfo/ethreads.git
+[submodule "vendors/exstd"]
+	path = vendors/exstd
+	url = git@github.com:RealAstolfo/exstd.git
