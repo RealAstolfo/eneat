@@ -3,6 +3,8 @@
 
 #include <iostream>
 
+#include "math.hpp"
+
 struct mutation_rate_container {
   exfloat connection_mutate_chance = 0.75f;
   exfloat perturb_chance = 0.9f;

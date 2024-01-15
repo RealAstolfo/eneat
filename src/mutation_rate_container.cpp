@@ -1,7 +1,4 @@
 #include "mutation_rate_container.hpp"
-#include "math.hpp"
-
-#include <iostream>
 
 std::istream &operator>>(std::istream &input, mutation_rate_container &mrc) {
   input >> mrc.connection_mutate_chance;
