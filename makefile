@@ -7,7 +7,7 @@ AS = as
 INC = -I./include -I./vendors/ethreads/include -I./vendors/exstd/include -I./vendors/emath/include
 LIB =  -L. -L/usr/lib64 -L/usr/local/lib64
 
-CFLAGS = -march=native -O3 -pg -Wall -Wextra -pedantic $(INC)
+CFLAGS = -march=native -O3 -g -Wall -Wextra -pedantic $(INC)
 CXXFLAGS = -std=c++20 $(CFLAGS)
 LDFLAGS = $(LIB) -O3
 
@@ -41,7 +41,6 @@ neat.o:
 
 neat: ai.o neat.o vendors/ethreads/threading.o
 	${CXX} ${CXXFLAGS} $^ -o $@
-
 
 all: neat
 
