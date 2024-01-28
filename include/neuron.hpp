@@ -1,5 +1,5 @@
-#ifndef NEURON_HPP
-#define NEURON_HPP
+#ifndef ENEAT_NEURON_HPP
+#define ENEAT_NEURON_HPP
 
 #include <stdbool.h>
 #include <stdlib.h>

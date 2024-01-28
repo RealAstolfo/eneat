@@ -1,5 +1,5 @@
-#ifndef POOL_HPP
-#define POOL_HPP
+#ifndef ENEAT_POOL_HPP
+#define ENEAT_POOL_HPP
 
 #include <cstddef>
 #include <future>

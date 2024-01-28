@@ -1,5 +1,5 @@
-#ifndef FUNCTIONS_HPP
-#define FUNCTIONS_HPP
+#ifndef ENEAT_FUNCTIONS_HPP
+#define ENEAT_FUNCTIONS_HPP
 
 #include <cmath>
 #include <iostream>

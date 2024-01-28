@@ -1,5 +1,5 @@
-#ifndef SPECIE_HPP
-#define SPECIE_HPP
+#ifndef ENEAT_SPECIE_HPP
+#define ENEAT_SPECIE_HPP
 
 #include <cstddef>
 #include <vector>

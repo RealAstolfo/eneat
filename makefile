@@ -11,6 +11,8 @@ CFLAGS = -march=native -O3 -g -Wall -Wextra -pedantic $(INC)
 CXXFLAGS = -std=c++20 $(CFLAGS)
 LDFLAGS = $(LIB) -O3
 
+ZLIB = `pkgconf --cflags --libs zlib`
+
 # AI
 brain.o:
 	${CXX} ${CXXFLAGS} -c src/brain.cpp -o $@
@@ -24,8 +26,12 @@ pool.o:
 speciating-parameter-container.o:
 	${CXX} ${CXXFLAGS} -c src/speciating_parameter_container.cpp -o $@
 
-ai.o: brain.o mutation-rate-container.o pool.o speciating-parameter-container.o
+model.o:
+	${CXX} ${CXXFLAGS} -c src/model.cpp -o $@
+
+ai.o: brain.o mutation-rate-container.o pool.o speciating-parameter-container.o model.o
 	${LD} -r $^ -o $@
+
 
 # Threading
 vendors/ethreads/threading.o:
@@ -40,7 +46,7 @@ neat.o:
 	${CXX} ${CXXFLAGS} -c builds/neat.cpp -o $@
 
 neat: ai.o neat.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} $^ -o $@
+	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
 
 all: neat
 

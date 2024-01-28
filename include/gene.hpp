@@ -1,5 +1,5 @@
-#ifndef GENE_HPP
-#define GENE_HPP
+#ifndef ENEAT_GENE_HPP
+#define ENEAT_GENE_HPP
 
 #include "functions.hpp"
 #include "math.hpp"

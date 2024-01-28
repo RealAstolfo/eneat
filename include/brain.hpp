@@ -1,5 +1,5 @@
-#ifndef BRAIN_HPP
-#define BRAIN_HPP
+#ifndef ENEAT_BRAIN_HPP
+#define ENEAT_BRAIN_HPP
 
 #include <fstream>
 #include <iterator>

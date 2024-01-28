@@ -1,5 +1,5 @@
-#ifndef GENOME_HPP
-#define GENOME_HPP
+#ifndef ENEAT_GENOME_HPP
+#define ENEAT_GENOME_HPP
 
 #include <map>
 #include <stdbool.h>

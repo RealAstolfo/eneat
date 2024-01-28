@@ -1,5 +1,5 @@
-#ifndef NETWORK_INFO_CONTAINER_HPP
-#define NETWORK_INFO_CONTAINER_HPP
+#ifndef ENEAT_NETWORK_INFO_CONTAINER_HPP
+#define ENEAT_NETWORK_INFO_CONTAINER_HPP
 
 #include <iostream>
 #include <stdbool.h>
