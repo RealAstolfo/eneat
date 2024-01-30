@@ -33,24 +33,24 @@ model::~model() {
 }
 
 std::pair<decltype(genome::fitness), genome *>
-training_job(std::vector<genome>::iterator start,
-             std::vector<genome>::iterator stop,
+training_job(std::vector<genome *>::iterator start,
+             std::vector<genome *>::iterator stop,
              std::function<decltype(genome::fitness)(brain &)> fit_func) {
-  genome &best_genome = *start;
+  genome *best_genome = *start;
   decltype(genome::fitness) best_fitness = 0;
 
   for (; start != stop; std::advance(start, 1)) {
     brain net;
-    net = *start;
-    start->fitness = fit_func(net);
-    if (start->fitness > best_fitness) {
-      best_fitness = start->fitness;
-      best_genome = *start;
+    genome *const genome = *start;
+    net = *genome;
+    genome->fitness = fit_func(net);
+    if (genome->fitness > best_fitness) {
+      best_fitness = genome->fitness;
+      best_genome = genome;
     }
   }
 
-  return std::pair<decltype(best_fitness), genome *>(best_fitness,
-                                                     &best_genome);
+  return std::pair<decltype(best_fitness), genome *>(best_fitness, best_genome);
 }
 
 void model::train(std::size_t times) {
@@ -59,15 +59,20 @@ void model::train(std::size_t times) {
     std::vector<std::future<std::pair<decltype(genome::fitness), genome *>>>
         futures;
 
-    for (auto s = std::begin(this->p->species); s != std::end(this->p->species);
-         std::advance(s, 1)) {
+    std::vector<genome *> genomes;
+    for (auto &specie : this->p->species)
+      std::transform(std::begin(specie.genomes), std::end(specie.genomes),
+                     std::back_inserter(genomes),
+                     [](genome &g) -> genome * { return &g; });
 
-      auto lfutures = add_batch_task(training_job, std::begin(s->genomes),
-                                     std::end(s->genomes), this->get_fitness);
-      futures.insert(std::end(futures),
-                     std::make_move_iterator(std::begin(lfutures)),
-                     std::make_move_iterator(std::end(lfutures)));
-    }
+    std::sort(std::begin(genomes), std::end(genomes),
+              [](const genome *a, const genome *b) { return a < b; });
+
+    auto last = std::unique(std::begin(genomes), std::end(genomes));
+    genomes.erase(last, std::end(genomes));
+
+    futures = add_batch_task(training_job, std::begin(genomes),
+                             std::end(genomes), this->get_fitness);
 
     for (auto &future : futures) {
       auto [fitness, genome] = future.get();
