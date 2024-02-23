@@ -10,6 +10,12 @@
 #define xor_max_n 4
 #define needed_fitness 0.95
 
+const std::vector<std::pair<std::vector<exfloat>, exfloat>> test_cases = {
+    {{0.0, 0.0}, 0.0f},
+    {{0.0, 1.0}, 1.0f},
+    {{1.0, 0.0}, 1.0f},
+    {{1.0, 1.0}, 0.0f}};
+
 int main() {
   const auto fitness_function = [](brain &net) -> decltype(genome::fitness) {
     if (net.neurons.size() > xor_max_n)
@@ -17,11 +23,6 @@ int main() {
 
     std::vector<exfloat> output(1, 0.0);
     exfloat fitness = 0.0f;
-    const std::vector<std::pair<std::vector<exfloat>, exfloat>> test_cases = {
-        {{0.0, 0.0}, 0.0f},
-        {{0.0, 1.0}, 1.0f},
-        {{1.0, 0.0}, 1.0f},
-        {{1.0, 1.0}, 0.0f}};
 
     for (const auto &[test_input, expected_output] : test_cases) {
       net.evaluate(test_input, output);
@@ -56,11 +57,6 @@ int main() {
            needed_fitness);
 
   std::vector<exfloat> output = {0};
-  const std::vector<std::pair<std::vector<exfloat>, exfloat>> test_cases = {
-      {{0.0, 0.0}, 0.0f},
-      {{0.0, 1.0}, 1.0f},
-      {{1.0, 0.0}, 1.0f},
-      {{1.0, 1.0}, 0.0f}};
 
   std::cerr << std::endl;
   for (const auto &[test_input, expected_output] : test_cases) {
