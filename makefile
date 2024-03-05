@@ -1,8 +1,5 @@
-CC = gcc
-CXX = g++
-LD = ld
-AR = ar
-AS = as
+CXX = zig c++
+AR = zig ar
 
 INC = -I./include -I./vendors/ethreads/include -I./vendors/exstd/include -I./vendors/emath/include
 LIB =  -L. -L/usr/lib64 -L/usr/local/lib64
@@ -30,7 +27,7 @@ model.o:
 	${CXX} ${CXXFLAGS} -c src/model.cpp -o $@
 
 ai.o: brain.o mutation-rate-container.o pool.o speciating-parameter-container.o model.o
-	${LD} -r $^ -o $@
+	${CXX} ${CXXFLAGS} -c $^ -o $@
 
 
 # Threading

@@ -36,7 +36,7 @@ inline exfloat sigmoid(exfloat x) noexcept {
   return 2 / (1 + std::exp(-x)) - 1;
 }
 
-inline exfloat tanh(exfloat x) noexcept { return std::tanh(x); }
+using std::tanh;
 
 inline exfloat gelu(exfloat x) {
   return 0.5f * x *
