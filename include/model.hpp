@@ -10,7 +10,7 @@
 
 struct model {
   model(const std::function<decltype(genome::fitness)(brain &)> &get_fitness,
-        std::string &model_name);
+        std::string &model_name, const std::size_t input = 1, const std::size_t output = 1);
 
   ~model();
 

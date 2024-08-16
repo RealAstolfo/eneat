@@ -15,10 +15,10 @@
 
 model::model(
     const std::function<decltype(genome::fitness)(brain &)> &get_fitness,
-    std::string &model_name)
+    std::string &model_name, const std::size_t input, const std::size_t output)
     : get_fitness(get_fitness) {
   this->model_name = std::move(model_name);
-  this->p = std::make_unique<pool>(1, 1, 1, true);
+  this->p = std::make_unique<pool>(input, output, 1, true);
   load_pool(this->model_name + "_pool");
   load_best(this->model_name + "_best");
 
