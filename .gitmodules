@@ -1,9 +1,9 @@
 [submodule "vendors/emath"]
 	path = vendors/emath
-	url = ssh://git@github.com:RealAstolfo/emath.git
+	url = git@github.com:RealAstolfo/emath.git
 [submodule "vendors/ethreads"]
 	path = vendors/ethreads
-	url = ssh://git@github.com:RealAstolfo/ethreads.git
+	url = git@github.com:RealAstolfo/ethreads.git
 [submodule "vendors/exstd"]
 	path = vendors/exstd
-	url = ssh://git@github.com:RealAstolfo/exstd.git
+	url = git@github.com:RealAstolfo/exstd.git
