@@ -9,6 +9,7 @@ CXXFLAGS = -std=c++20 $(CFLAGS)
 LDFLAGS = $(LIB) -O3
 
 ZLIB = `pkgconf --cflags --libs zlib`
+RAYLIB = `pkg-config --cflags --libs raylib`
 
 # AI
 brain.o:
@@ -45,12 +46,16 @@ neat.o:
 neat: ai.o neat.o vendors/ethreads/threading.o
 	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
 
-# NEAT with coroutine-based async runtime (CORO_MAIN pattern)
+# Network Visualizer (raylib)
+network-visualizer.o:
+	${CXX} ${CXXFLAGS} -c src/network_visualizer.cpp -o $@
+
+# NEAT with coroutine-based async runtime (CORO_MAIN pattern) + visualization
 neat_coro.o:
 	${CXX} ${CXXFLAGS} -c builds/neat_coro.cpp -o $@
 
-neat_coro: ai.o neat_coro.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+neat_coro: ai.o neat_coro.o network-visualizer.o vendors/ethreads/threading.o
+	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} $^ -o $@
 
 all: neat neat_coro
 
