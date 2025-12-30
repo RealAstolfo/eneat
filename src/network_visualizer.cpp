@@ -147,13 +147,16 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
     const float screen_height = static_cast<float>(GetScreenHeight());
 
     // Layout constants
-    const float MIN_SPACING = 8.0f;   // Reduced for large networks
-    const float NEURON_RADIUS = 6.0f; // Smaller neurons for dense layers
-    const float MARGIN = 40.0f;
+    const float MIN_SPACING = 8.0f;   // Minimum spacing for scale calculation
+    const float NEURON_RADIUS = 6.0f; // Base neuron radius
+    const float MARGIN = 60.0f;       // Increased margin for safety
+    const float BOTTOM_RESERVE = 50.0f;  // Reserve for info text
 
-    const float available_height = screen_height - 2 * MARGIN - 30; // Reserve for info text
+    // Fixed Y bounds for ALL layers (with margin)
+    const float top_y = MARGIN;
+    const float bottom_y = screen_height - MARGIN - BOTTOM_RESERVE;
+    const float available_height = bottom_y - top_y;
     const float available_width = screen_width - 2 * MARGIN;
-    const float center_y = MARGIN + available_height / 2.0f;  // Center of available area, not screen
 
     // Compute topological depth for each neuron
     auto depths = compute_depths(net);
@@ -176,7 +179,7 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
         }
     }
 
-    // Find the tallest layer for scaling
+    // Find the tallest layer for scale calculation
     size_t max_layer_size = 1;
     for (const auto& layer : layers) {
         if (layer.size() > max_layer_size) {
@@ -184,19 +187,14 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
         }
     }
 
-    // Calculate scale to fit tallest layer
-    // Span of n neurons = (n-1) * spacing between centers
-    // We need this span to fit within available_height
-    float base_spacing = 2 * NEURON_RADIUS + MIN_SPACING;
-    float required_height = (max_layer_size - 1) * base_spacing;
-    float scale_y = (required_height > 0) ? (available_height / required_height) : 1.0f;
-    out_scale = std::min(scale_y, 1.0f);
+    // Calculate scale based on minimum spacing needed in tallest layer
+    float min_spacing_needed = 2 * NEURON_RADIUS + MIN_SPACING;
+    float actual_spacing = (max_layer_size > 1) ? (available_height / (max_layer_size - 1)) : available_height;
+    out_scale = std::min(1.0f, actual_spacing / min_spacing_needed);
 
     // Position neurons by layer
     // X: evenly distribute layers across available width
-    // Y: center neurons within each layer
-    float neuron_spacing = (2 * NEURON_RADIUS + MIN_SPACING) * out_scale;
-
+    // Y: ALL layers span from top_y to bottom_y (aligned top/bottom)
     for (int layer_idx = 0; layer_idx <= max_depth; layer_idx++) {
         const auto& layer = layers[layer_idx];
         if (layer.empty()) continue;
@@ -204,19 +202,21 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
         // X position: linear interpolation from left margin to right margin
         float x = MARGIN + (static_cast<float>(layer_idx) / max_depth) * available_width;
 
-        // Y positions: center the layer vertically
-        // Total span from first to last neuron center = (n-1) * spacing
         size_t layer_size = layer.size();
-        float total_span = (layer_size - 1) * neuron_spacing;
-        float start_y = center_y - total_span / 2.0f;
-
-        for (size_t i = 0; i < layer_size; i++) {
-            float y = start_y + i * neuron_spacing;
-            positions[layer[i]] = {x, y};
+        if (layer_size == 1) {
+            // Single neuron: center vertically
+            positions[layer[0]] = {x, (top_y + bottom_y) / 2.0f};
+        } else {
+            // Multiple neurons: distribute evenly from top_y to bottom_y
+            float spacing = available_height / (layer_size - 1);
+            for (size_t i = 0; i < layer_size; i++) {
+                float y = top_y + i * spacing;
+                positions[layer[i]] = {x, y};
+            }
         }
     }
 
-    // Handle disconnected neurons (depth = -1) - place them at far right
+    // Handle disconnected neurons (depth = -1) - place them at far right, also spanning full height
     std::vector<size_t> disconnected;
     for (size_t i = 0; i < net.neurons.size(); i++) {
         if (depths[i] < 0) {
@@ -225,12 +225,15 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
     }
     if (!disconnected.empty()) {
         float x = MARGIN + available_width + 30; // Past the output layer
-        float total_span = (disconnected.size() - 1) * neuron_spacing;
-        float start_y = center_y - total_span / 2.0f;
-
-        for (size_t i = 0; i < disconnected.size(); i++) {
-            float y = start_y + i * neuron_spacing;
-            positions[disconnected[i]] = {x, y};
+        size_t disc_size = disconnected.size();
+        if (disc_size == 1) {
+            positions[disconnected[0]] = {x, (top_y + bottom_y) / 2.0f};
+        } else {
+            float spacing = available_height / (disc_size - 1);
+            for (size_t i = 0; i < disc_size; i++) {
+                float y = top_y + i * spacing;
+                positions[disconnected[i]] = {x, y};
+            }
         }
     }
 
