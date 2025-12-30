@@ -315,5 +315,16 @@ void NetworkVisualizer::render(const brain& net) {
     DrawText("Hidden", 120, 10, 12, GRAY);
     DrawText("Bias", 180, 10, 12, YELLOW);
 
+    // Call label callback if set (allows custom labels to be drawn)
+    if (label_callback_) {
+        for (size_t i = 0; i < net.neurons.size(); i++) {
+            label_callback_(i, positions[i].x, positions[i].y, net.neurons[i].value);
+        }
+    }
+
     EndDrawing();
+}
+
+void NetworkVisualizer::set_label_callback(NeuronLabelCallback callback) {
+    label_callback_ = std::move(callback);
 }

@@ -2,8 +2,12 @@
 #define ENEAT_NETWORK_VISUALIZER_HPP
 
 #include <vector>
+#include <functional>
 #include "brain.hpp"
 #include "raylib.h"
+
+// Callback receives: neuron index, x position, y position, neuron value
+using NeuronLabelCallback = std::function<void(size_t idx, float x, float y, float value)>;
 
 class NetworkVisualizer {
 public:
@@ -19,10 +23,14 @@ public:
     void render(const brain& net);
     void update();
 
+    // Optional callback for drawing labels on neurons
+    void set_label_callback(NeuronLabelCallback callback);
+
 private:
     int width_;
     int height_;
     bool window_open_ = false;
+    NeuronLabelCallback label_callback_;
 
     // Node position for layout
     struct NodePos {
