@@ -4,7 +4,10 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <thread>
 
+#include "async_runtime.hpp"
+#include "coro_task.hpp"
 #include "genome.hpp"
 #include "model.hpp"
 #include "pool.hpp"
@@ -23,8 +26,8 @@ model::model(
   load_best(this->model_name + "_best");
 
   srand(time(NULL));
-  this->p->max_fitness =
-      std::numeric_limits<decltype(this->p->max_fitness)>::max();
+  this->p->max_fitness.store(
+      std::numeric_limits<size_t>::max());
 }
 
 model::~model() {
@@ -32,10 +35,11 @@ model::~model() {
   save_pool();
 }
 
-std::pair<decltype(genome::fitness), genome *>
-training_job(std::vector<genome *>::iterator start,
-             std::vector<genome *>::iterator stop,
-             std::function<decltype(genome::fitness)(brain &)> fit_func) {
+// Coroutine-based training job for a batch of genomes
+ethreads::coro_task<std::pair<decltype(genome::fitness), genome *>>
+training_job_coro(std::vector<genome *>::iterator start,
+                  std::vector<genome *>::iterator stop,
+                  std::function<decltype(genome::fitness)(brain &)> fit_func) {
   genome *best_genome = *start;
   decltype(genome::fitness) best_fitness = 0;
 
@@ -50,15 +54,12 @@ training_job(std::vector<genome *>::iterator start,
     }
   }
 
-  return std::pair<decltype(best_fitness), genome *>(best_fitness, best_genome);
+  co_return std::pair<decltype(best_fitness), genome *>(best_fitness, best_genome);
 }
 
 void model::train(std::size_t times) {
   decltype(genome::fitness) best_fitness = this->get_fitness(best);
   while (times-- > 0) {
-    std::vector<std::future<std::pair<decltype(genome::fitness), genome *>>>
-        futures;
-
     std::vector<genome *> genomes;
     for (auto &specie : this->p->species)
       std::transform(std::begin(specie.genomes), std::end(specie.genomes),
@@ -71,11 +72,35 @@ void model::train(std::size_t times) {
     auto last = std::unique(std::begin(genomes), std::end(genomes));
     genomes.erase(last, std::end(genomes));
 
-    futures = add_batch_task(training_job, std::begin(genomes),
-                             std::end(genomes), this->get_fitness);
+    // Create coroutine tasks for parallel genome evaluation
+    std::vector<ethreads::coro_task<std::pair<decltype(genome::fitness), genome *>>> tasks;
+    const std::size_t num_threads = std::thread::hardware_concurrency();
+    const std::size_t total_items = genomes.size();
 
-    for (auto &future : futures) {
-      auto [fitness, genome] = future.get();
+    if (total_items == 0) {
+      this->p->new_generation();
+      continue;
+    }
+
+    const std::size_t batch_size = (total_items + num_threads - 1) / num_threads;
+    auto batch_start = std::begin(genomes);
+
+    while (batch_start != std::end(genomes)) {
+      auto batch_stop = batch_start;
+      std::size_t remaining = std::distance(batch_start, std::end(genomes));
+      std::advance(batch_stop, std::min(batch_size, remaining));
+      tasks.push_back(training_job_coro(batch_start, batch_stop, this->get_fitness));
+      batch_start = batch_stop;
+    }
+
+    // Start all tasks
+    for (auto &task : tasks) {
+      task.start();
+    }
+
+    // Collect results
+    for (auto &task : tasks) {
+      auto [fitness, genome] = task.get();
       if (fitness > best_fitness) {
         best_fitness = fitness;
         this->best = *genome;

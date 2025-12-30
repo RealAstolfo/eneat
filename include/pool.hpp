@@ -1,39 +1,51 @@
 #ifndef ENEAT_POOL_HPP
 #define ENEAT_POOL_HPP
 
+#include <atomic>
 #include <cstddef>
-#include <future>
 #include <list>
 #include <map>
-#include <mutex>
+#include <memory>
 #include <random>
 #include <stdbool.h>
 #include <utility>
 #include <vector>
 
-#include "innovation_container.hpp"
+#include "coro_task.hpp"
+#include "innovation_channel.hpp"
 #include "mutation_rate_container.hpp"
 #include "network_info_container.hpp"
 #include "speciating_parameter_container.hpp"
+#include "species_channel.hpp"
 
 typedef struct specie specie;
 typedef struct genome genome;
 
+// Thread-local RNG for lock-free random number generation
+// Each thread gets its own generator seeded from random_device
+namespace eneat {
+inline thread_local std::mt19937 tl_generator{std::random_device{}()};
+
+template <typename Dist>
+inline auto get_rand(Dist &d) -> decltype(d(tl_generator)) {
+  return d(tl_generator);
+}
+} // namespace eneat
+
 struct pool {
-  innovation_container innovation;
-  std::mutex inn_mutex;
+  // Channel-based innovation tracking (replaces mutex-protected container)
+  eneat::innovation_channel innovation_chan;
+
+  // Channel-based species management (lazy initialized)
+  std::unique_ptr<eneat::species_channel> species_chan;
 
   std::map<std::pair<size_t, size_t>, size_t> track;
-  size_t generation_number = 1;
-  size_t max_fitness = 0;
+  std::atomic<size_t> generation_number{1};
+  std::atomic<size_t> max_fitness{0};
   mutation_rate_container mutation_rates;
   speciating_parameter_container speciating_parameters;
   network_info_container network_info;
   std::list<specie> species;
-
-  std::random_device rd;
-  std::mt19937 generator;
-  std::mutex gen_mutex;
 
   pool(size_t input, size_t output, size_t bias = 1, bool rec = false);
 
@@ -41,39 +53,37 @@ struct pool {
   void new_generation();
   std::vector<std::pair<specie *, genome *>> get_genomes();
   genome crossover(const genome &g1, const genome &g2);
-  void mutate_activation(genome &g);
-  void mutate_weight(genome &g);
-  void mutate_enable_disable(genome &g, const bool &enable);
-  void mutate_link(genome &g, const bool &force_bias);
-  void mutate_neuron(genome &g);
-  void mutate(genome &g);
+  // Coroutine mutation functions
+  ethreads::coro_task<void> mutate_activation(genome &g);
+  ethreads::coro_task<void> mutate_weight(genome &g);
+  ethreads::coro_task<void> mutate_enable_disable(genome &g, const bool &enable);
+  ethreads::coro_task<void> mutate_link(genome &g, const bool &force_bias);
+  ethreads::coro_task<void> mutate_neuron(genome &g);
+  ethreads::coro_task<void> mutate(genome &g);
+
+  // Synchronous mutation for single-threaded initialization
+  void mutate_sync(genome &g);
   exfloat disjoint(const genome &g1, const genome &g2);
   exfloat weights(const genome &g1, const genome &g2);
   void rank_globally();
   void calculate_average_fitness(specie &s);
   size_t total_average_fitness();
   void cull_species(const bool &cut_to_one);
-  std::future<genome> breed_child(specie &s);
+  ethreads::coro_task<genome> breed_child(specie &s);
   void remove_stale_species();
   void remove_weak_species();
   void add_to_species(const genome &child);
 
-  inline exfloat get_rand(std::uniform_real_distribution<exfloat> &d,
-                          std::mt19937 &generator) {
-    std::lock_guard<std::mutex> lock(gen_mutex);
-    return d(generator);
-  }
+  // Initialize species channel (call before async operations)
+  void init_species_channel();
+  // Async add to species via channel
+  ethreads::coro_task<void> add_to_species_async(genome child);
 
-  inline size_t get_rand(std::uniform_int_distribution<size_t> &d,
-                         std::mt19937 &generator) {
-    std::lock_guard<std::mutex> lock(gen_mutex);
-    return d(generator);
-  }
-
-  inline int get_rand(std::uniform_int_distribution<int> &d,
-                      std::mt19937 &generator) {
-    std::lock_guard<std::mutex> lock(gen_mutex);
-    return d(generator);
+  // Deprecated: use eneat::get_rand() instead
+  // Kept for compatibility during transition
+  template <typename Dist>
+  inline auto get_rand(Dist &d, std::mt19937 &) -> decltype(d(eneat::tl_generator)) {
+    return eneat::get_rand(d);
   }
 };
 
