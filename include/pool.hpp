@@ -79,6 +79,13 @@ struct pool {
   // Async add to species via channel
   ethreads::coro_task<void> add_to_species_async(genome child);
 
+  // Async versions of species operations for parallel execution
+  ethreads::coro_task<void> cull_species_async(const bool &cut_to_one);
+  ethreads::coro_task<void> rank_globally_async();
+  ethreads::coro_task<void> calculate_all_average_fitness_async();
+  // Async new_generation using when_all for parallel operations
+  ethreads::coro_task<void> new_generation_async();
+
   // Deprecated: use eneat::get_rand() instead
   // Kept for compatibility during transition
   template <typename Dist>

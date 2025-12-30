@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "brain.hpp"
+#include "coro_task.hpp"
 #include "pool.hpp"
 
 struct model {
@@ -15,6 +16,7 @@ struct model {
   ~model();
 
   void train(std::size_t times = 1);
+  ethreads::coro_task<void> train_async(std::size_t times = 1);
 
   bool save_best();
   bool save_pool();

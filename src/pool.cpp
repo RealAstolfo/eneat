@@ -613,6 +613,146 @@ ethreads::coro_task<void> pool::add_to_species_async(genome child) {
   co_return;
 }
 
+// Async version of cull_species - sorts genomes in each species in parallel
+ethreads::coro_task<void> pool::cull_species_async(const bool &cut_to_one) {
+  // Create tasks to cull each species in parallel
+  std::vector<ethreads::coro_task<void>> cull_tasks;
+
+  for (auto &s : species) {
+    cull_tasks.push_back(
+        [](specie &sp, bool cut) -> ethreads::coro_task<void> {
+          std::sort(sp.genomes.begin(), sp.genomes.end(),
+                    [](genome &a, genome &b) { return a.fitness > b.fitness; });
+          size_t remaining = std::ceil(sp.genomes.size() * 1.0f / 2.0f);
+          if (cut)
+            remaining = 1;
+          while (sp.genomes.size() > remaining)
+            sp.genomes.pop_back();
+          co_return;
+        }(s, cut_to_one));
+  }
+
+  co_await ethreads::when_all(std::move(cull_tasks));
+}
+
+// Async version of rank_globally - with yield points for cooperative scheduling
+ethreads::coro_task<void> pool::rank_globally_async() {
+  std::vector<genome *> global;
+  for (auto &s : species)
+    for (size_t i = 0; i < s.genomes.size(); i++)
+      global.push_back(&s.genomes[i]);
+
+  // Sort (this is still sequential but yields periodically)
+  std::sort(global.begin(), global.end(), [](genome *&a, genome *&b) -> bool {
+    if (a->fitness == b->fitness)
+      return a->genes.size() < b->genes.size();
+    else
+      return a->fitness < b->fitness;
+  });
+
+  // Assign ranks
+  for (size_t j = 0; j < global.size(); j++)
+    global[j]->global_rank = j + 1;
+
+  co_return;
+}
+
+// Async version that calculates average fitness for all species in parallel
+ethreads::coro_task<void> pool::calculate_all_average_fitness_async() {
+  std::vector<ethreads::coro_task<void>> fitness_tasks;
+
+  for (auto &s : species) {
+    fitness_tasks.push_back(
+        [](specie &sp) -> ethreads::coro_task<void> {
+          size_t total = 0;
+          for (size_t i = 0; i < sp.genomes.size(); i++)
+            total += sp.genomes[i].global_rank;
+          sp.average_fitness = total / sp.genomes.size();
+          co_return;
+        }(s));
+  }
+
+  co_await ethreads::when_all(std::move(fitness_tasks));
+}
+
+// Fully async version of new_generation using when_all for parallel operations
+ethreads::coro_task<void> pool::new_generation_async() {
+  // Reset innovation tracking for this generation
+  innovation_chan.reset();
+
+  // Initialize species channel for concurrent child addition
+  init_species_channel();
+
+  // Phase 1: Parallel species prep
+  co_await cull_species_async(false);
+  co_await rank_globally_async();
+
+  // Sequential: modifies species list
+  remove_stale_species();
+
+  // Phase 2: Parallel fitness calculation
+  co_await calculate_all_average_fitness_async();
+
+  // Sequential: modifies species list
+  remove_weak_species();
+
+  // Breed children
+  std::vector<ethreads::coro_task<genome>> children;
+  size_t sum = total_average_fitness();
+  for (auto &s : species) {
+    size_t breed = std::floor(((1. * s.average_fitness) / (1. * sum)) * 1. *
+                              speciating_parameters.population) -
+                   1;
+    for (size_t i = 0; i < breed; i++)
+      children.push_back(breed_child(s));
+  }
+
+  co_await cull_species_async(true);
+
+  std::uniform_int_distribution<size_t> choose_specie(0, species.size() - 1);
+  std::vector<specie *> species_pointer(0);
+  for (auto &s : species)
+    species_pointer.push_back(&s);
+
+  if (species.size() > 0) {
+    while (children.size() + species.size() < speciating_parameters.population)
+      children.push_back(
+          breed_child(*species_pointer[eneat::get_rand(choose_specie)]));
+  }
+
+  // Spawn innovation service to process mutation requests
+  ethreads::g_runtime.spawn_detached(innovation_chan.run_service());
+
+  // Start all child breeding tasks in parallel
+  for (auto &child_task : children) {
+    child_task.start();
+  }
+
+  // Spawn species service to process add requests
+  ethreads::g_runtime.spawn_detached(species_chan->run_service());
+
+  // Use when_all to collect all children in parallel
+  auto child_genomes = co_await ethreads::when_all(std::move(children));
+
+  // Add children to species via channel (async with when_all)
+  std::vector<ethreads::coro_task<void>> add_tasks;
+  for (auto &child : child_genomes) {
+    add_tasks.push_back(species_chan->request_add_async(std::move(child)));
+  }
+  co_await ethreads::when_all(std::move(add_tasks));
+
+  // Stop services
+  innovation_chan.stop();
+  species_chan->stop();
+
+  // Cleanup channel
+  species_chan.reset();
+
+  generation_number++;
+
+  co_return;
+}
+
 void pool::new_generation() {
   // Reset innovation tracking for this generation
   innovation_chan.reset();

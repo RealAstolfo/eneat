@@ -93,12 +93,12 @@ void model::train(std::size_t times) {
       batch_start = batch_stop;
     }
 
-    // Start all tasks
+    // Start all tasks for parallel execution
     for (auto &task : tasks) {
       task.start();
     }
 
-    // Collect results
+    // Collect results (tasks run in parallel, collection is sequential)
     for (auto &task : tasks) {
       auto [fitness, genome] = task.get();
       if (fitness > best_fitness) {
@@ -108,6 +108,55 @@ void model::train(std::size_t times) {
     }
 
     this->p->new_generation();
+  }
+}
+
+ethreads::coro_task<void> model::train_async(std::size_t times) {
+  decltype(genome::fitness) best_fitness = this->get_fitness(best);
+
+  while (times-- > 0) {
+    std::vector<genome *> genomes;
+    for (auto &specie : this->p->species)
+      std::transform(std::begin(specie.genomes), std::end(specie.genomes),
+                     std::back_inserter(genomes),
+                     [](genome &g) -> genome * { return &g; });
+
+    std::sort(std::begin(genomes), std::end(genomes),
+              [](const genome *a, const genome *b) { return a < b; });
+
+    auto last = std::unique(std::begin(genomes), std::end(genomes));
+    genomes.erase(last, std::end(genomes));
+
+    if (genomes.empty()) {
+      co_await this->p->new_generation_async();
+      continue;
+    }
+
+    // Create evaluation tasks
+    std::vector<ethreads::coro_task<std::pair<decltype(genome::fitness), genome *>>> tasks;
+    const std::size_t num_threads = std::thread::hardware_concurrency();
+    const std::size_t batch_size = (genomes.size() + num_threads - 1) / num_threads;
+
+    auto batch_start = std::begin(genomes);
+    while (batch_start != std::end(genomes)) {
+      auto batch_stop = batch_start;
+      std::size_t remaining = std::distance(batch_start, std::end(genomes));
+      std::advance(batch_stop, std::min(batch_size, remaining));
+      tasks.push_back(training_job_coro(batch_start, batch_stop, this->get_fitness));
+      batch_start = batch_stop;
+    }
+
+    // Use when_all for parallel evaluation
+    auto results = co_await ethreads::when_all(std::move(tasks));
+
+    for (auto &[fitness, genome] : results) {
+      if (fitness > best_fitness) {
+        best_fitness = fitness;
+        this->best = *genome;
+      }
+    }
+
+    co_await this->p->new_generation_async();
   }
 }
 

@@ -45,10 +45,17 @@ neat.o:
 neat: ai.o neat.o vendors/ethreads/threading.o
 	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
 
-all: neat
+# NEAT with coroutine-based async runtime (CORO_MAIN pattern)
+neat_coro.o:
+	${CXX} ${CXXFLAGS} -c builds/neat_coro.cpp -o $@
+
+neat_coro: ai.o neat_coro.o vendors/ethreads/threading.o
+	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+
+all: neat neat_coro
 
 clean:
-	-rm -f neat *.o
+	-rm -f neat neat_coro *.o
 	make -C vendors/ethreads clean
 	make -C vendors/exstd clean
 	make -C vendors/emath clean
