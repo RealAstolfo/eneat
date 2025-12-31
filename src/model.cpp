@@ -58,7 +58,8 @@ training_job_coro(std::vector<genome *>::iterator start,
 }
 
 void model::train(std::size_t times) {
-  decltype(genome::fitness) best_fitness = this->get_fitness(best);
+  // Use stored best fitness for comparison
+  decltype(genome::fitness) best_fitness = this->best_fitness.load();
   while (times-- > 0) {
     std::vector<genome *> genomes;
     for (auto &specie : this->p->species)
@@ -104,6 +105,7 @@ void model::train(std::size_t times) {
       if (fitness > best_fitness) {
         best_fitness = fitness;
         this->best = *genome;
+        this->best_fitness.store(fitness);
       }
     }
 
@@ -112,7 +114,8 @@ void model::train(std::size_t times) {
 }
 
 ethreads::coro_task<void> model::train_async(std::size_t times) {
-  decltype(genome::fitness) best_fitness = this->get_fitness(best);
+  // Use stored best fitness for comparison
+  decltype(genome::fitness) best_fitness = this->best_fitness.load();
 
   while (times-- > 0) {
     std::vector<genome *> genomes;
@@ -153,6 +156,7 @@ ethreads::coro_task<void> model::train_async(std::size_t times) {
       if (fitness > best_fitness) {
         best_fitness = fitness;
         this->best = *genome;
+        this->best_fitness.store(fitness);
       }
     }
 

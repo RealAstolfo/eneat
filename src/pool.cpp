@@ -745,6 +745,9 @@ ethreads::coro_task<void> pool::new_generation_async() {
   innovation_chan.stop();
   species_chan->stop();
 
+  // Clean up completed detached tasks to prevent memory leak
+  ethreads::g_runtime.collect_detached();
+
   // Cleanup channel
   species_chan.reset();
 
@@ -809,6 +812,9 @@ void pool::new_generation() {
   // Stop services
   innovation_chan.stop();
   species_chan->stop();
+
+  // Clean up completed detached tasks to prevent memory leak
+  ethreads::g_runtime.collect_detached();
 
   // Cleanup channel
   species_chan.reset();

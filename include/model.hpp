@@ -1,6 +1,7 @@
 #ifndef ENEAT_MODEL_HPP
 #define ENEAT_MODEL_HPP
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -26,6 +27,7 @@ struct model {
   const std::function<decltype(genome::fitness)(brain &)> get_fitness;
   std::string model_name;
   brain best;
+  std::atomic<size_t> best_fitness{0};  // Tracks best brain's fitness
   std::unique_ptr<pool> p;
 };
 
