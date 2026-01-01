@@ -1,7 +1,6 @@
 #ifndef ENEAT_GENOME_HPP
 #define ENEAT_GENOME_HPP
 
-#include <atomic>
 #include <map>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -12,20 +11,21 @@
 #include "mutation_rate_container.hpp"
 #include "network_info_container.hpp"
 #include "speciating_parameter_container.hpp"
+#include "shared_state.hpp"
 
 typedef struct brain brain;
 
 struct genome {
-  std::atomic<size_t> fitness{0};
-  std::atomic<size_t> adjusted_fitness{0};
-  std::atomic<size_t> global_rank{0};
+  ethreads::sync_shared_value<size_t> fitness{0};
+  ethreads::sync_shared_value<size_t> adjusted_fitness{0};
+  ethreads::sync_shared_value<size_t> global_rank{0};
   size_t max_neuron;
   bool can_be_recurrent = false;
   mutation_rate_container mutation_rates;
   network_info_container network_info;
   std::map<size_t, gene> genes;
 
-  genome() : fitness(0), adjusted_fitness(0), global_rank(0) {}
+  genome() = default;
 
   genome(const network_info_container &info,
          const mutation_rate_container &rates)
@@ -35,7 +35,7 @@ struct genome {
     max_neuron = info.functional_neurons;
   }
 
-  // Copy constructor - atomics are not copyable, so we need explicit copy
+  // Copy constructor - sync_shared_value is not copyable, so we need explicit copy
   genome(const genome &other)
       : fitness(other.fitness.load()), adjusted_fitness(other.adjusted_fitness.load()),
         global_rank(other.global_rank.load()), max_neuron(other.max_neuron),

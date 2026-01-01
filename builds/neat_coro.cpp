@@ -3,9 +3,8 @@
 #include "utils.hpp"
 #include "async_runtime.hpp"
 #include "network_visualizer.hpp"
+#include "shared_state.hpp"
 #include <limits>
-#include <atomic>
-#include <mutex>
 
 #define xor_max_n 4
 #define needed_fitness 0.95
@@ -17,9 +16,9 @@ const std::vector<std::pair<std::vector<exfloat>, exfloat>> test_cases = {
     {{1.0, 1.0}, 0.0f}};
 
 int main() {
-  const auto fitness_function = [](brain &net) -> decltype(genome::fitness) {
+  const auto fitness_function = [](brain &net) -> ethreads::coro_task<size_t> {
     if (net.neurons.size() > xor_max_n)
-      return 0.0f;
+      co_return 0;
 
     std::vector<exfloat> output(1, 0.0);
     exfloat fitness = 0.0f;
@@ -30,8 +29,8 @@ int main() {
                            std::min(1.0f, error(output[0], expected_output)));
     }
 
-    return std::lerp(0.0f,
-                     std::numeric_limits<decltype(genome::fitness)>::max(),
+    co_return std::lerp(0.0f,
+                     (exfloat)std::numeric_limits<size_t>::max(),
                      fitness / 4.0f);
   };
 
@@ -46,48 +45,45 @@ int main() {
   visualizer.open();
 
   // Shared state for visualization
-  brain best_brain_copy;
-  std::mutex brain_mutex;
-  std::atomic<bool> training_done{false};
-  std::atomic<bool> new_generation{false};
+  ethreads::sync_shared_value<brain> best_brain_copy{};
+  ethreads::manual_reset_event training_done{false};
+  ethreads::auto_reset_event new_generation{false};
 
   // Training coroutine - runs async, updates shared state
   auto training_task = [&]() -> ethreads::coro_task<void> {
-    decltype(genome::fitness) current_best;
+    size_t current_best;
     do {
       co_await xor_model.train_async();
 
-      current_best = xor_model.get_fitness(xor_model.best);
+      current_best = xor_model.get_best_fitness();
 
       // Copy best brain for visualization (thread-safe)
-      {
-        std::lock_guard<std::mutex> lock(brain_mutex);
-        best_brain_copy = xor_model.best;
-      }
-      new_generation.store(true);
+      best_brain_copy.store(xor_model.get_best_brain());
+      new_generation.set();
 
       std::cerr
-          << "Generation: " << xor_model.p->generation_number
+          << "Generation: " << xor_model.p->generation_number.load()
           << " Population: " << xor_model.p->speciating_parameters.population
           << " Unique Species: " << xor_model.p->species.size() << " Fitness: "
           << current_best /
-                 (exfloat)std::numeric_limits<decltype(genome::fitness)>::max()
-          << " Neuron Count: " << xor_model.best.neurons.size() << '\r';
+                 (exfloat)std::numeric_limits<size_t>::max()
+          << " Neuron Count: " << xor_model.get_best_brain().neurons.size() << '\r';
     } while (current_best /
-                 (exfloat)std::numeric_limits<decltype(genome::fitness)>::max() <
+                 (exfloat)std::numeric_limits<size_t>::max() <
              needed_fitness);
 
     std::vector<exfloat> output = {0};
+    brain final_brain = xor_model.get_best_brain();
 
     std::cerr << std::endl;
     for (const auto &[test_input, expected_output] : test_cases) {
-      xor_model.best.evaluate(test_input, output);
+      final_brain.evaluate(test_input, output);
       std::cerr << test_input[0] << " " << test_input[1] << " -> "
                 << (int)(output[0] + 0.5f) << std::endl;
     }
 
     std::cerr << "Training complete. Close visualization window to exit." << std::endl;
-    training_done.store(true);
+    training_done.set();
     co_return;
   };
 
@@ -98,19 +94,17 @@ int main() {
   // Main thread render loop - keeps OpenGL context on main thread
   while (visualizer.is_open()) {
     // Check if new generation is ready to render
-    if (new_generation.exchange(false)) {
-      std::lock_guard<std::mutex> lock(brain_mutex);
-      visualizer.render(best_brain_copy);
-    } else if (training_done.load()) {
+    if (new_generation.try_wait()) {
+      visualizer.render(best_brain_copy.load());
+    } else if (training_done.is_set()) {
       // Training done, keep rendering final state
-      std::lock_guard<std::mutex> lock(brain_mutex);
-      visualizer.render(best_brain_copy);
+      visualizer.render(best_brain_copy.load());
     }
     visualizer.update();
   }
 
   // Wait for training to complete if window closed early
-  if (!training_done.load()) {
+  if (!training_done.is_set()) {
     task.get();
   }
 

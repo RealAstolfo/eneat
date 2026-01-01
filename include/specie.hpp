@@ -1,24 +1,24 @@
 #ifndef ENEAT_SPECIE_HPP
 #define ENEAT_SPECIE_HPP
 
-#include <atomic>
 #include <cstddef>
 #include <mutex>
 #include <vector>
 
 #include "genome.hpp"
+#include "shared_state.hpp"
 
 struct specie {
-  std::atomic<size_t> top_fitness{0};
-  std::atomic<size_t> average_fitness{0};
-  std::atomic<size_t> staleness{0};
+  ethreads::sync_shared_value<size_t> top_fitness{0};
+  ethreads::sync_shared_value<size_t> average_fitness{0};
+  ethreads::sync_shared_value<size_t> staleness{0};
   std::vector<genome> genomes;
   // Mutex to protect genomes vector during concurrent access
   mutable std::mutex genomes_mutex;
 
-  specie() : top_fitness(0), average_fitness(0), staleness(0) {}
+  specie() = default;
 
-  // Copy constructor - atomics and mutex are not copyable
+  // Copy constructor - sync_shared_value and mutex are not copyable
   specie(const specie &other)
       : top_fitness(other.top_fitness.load()),
         average_fitness(other.average_fitness.load()),

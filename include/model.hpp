@@ -1,17 +1,22 @@
 #ifndef ENEAT_MODEL_HPP
 #define ENEAT_MODEL_HPP
 
-#include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 #include "brain.hpp"
 #include "coro_task.hpp"
 #include "pool.hpp"
+#include "shared_state.hpp"
 
 using fitness_func_t = std::function<ethreads::coro_task<size_t>(brain &)>;
+
+// Combined state for best brain and its fitness
+struct best_state_t {
+  brain best;
+  size_t fitness{0};
+};
 
 struct model {
   model(const fitness_func_t &get_fitness, std::string &model_name);
@@ -32,22 +37,21 @@ struct model {
 
   // Thread-safe access to best brain
   brain get_best_brain() const {
-    std::lock_guard<std::mutex> lock(best_mutex_);
-    return best;
+    return best_state_.load().best;
+  }
+
+  size_t get_best_fitness() const {
+    return best_state_.load().fitness;
   }
 
   void set_best_brain(const brain& b, size_t fitness) {
-    std::lock_guard<std::mutex> lock(best_mutex_);
-    best = b;
-    best_fitness.store(fitness);
+    best_state_.store({b, fitness});
   }
 
   const fitness_func_t get_fitness;
   std::string model_name;
-  brain best;
-  std::atomic<size_t> best_fitness{0};  // Tracks best brain's fitness
+  ethreads::sync_shared_value<best_state_t> best_state_{};
   std::unique_ptr<pool> p;
-  mutable std::mutex best_mutex_;  // Protects 'best' brain access
 
 private:
   bool read_only_ = false;

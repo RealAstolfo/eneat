@@ -676,7 +676,7 @@ void pool::remove_stale_species() {
       s->top_fitness.store(best_fitness);
       s->staleness.store(0);
     } else
-      s->staleness.fetch_add(1);
+      s->staleness.modify([](size_t &v) { ++v; });
     // NOTE: This is removing a species when its higher than the set maximum
     // fitness...
     if (!(s->staleness.load() < speciating_parameters.stale_species ||
@@ -834,7 +834,7 @@ ethreads::coro_task<void> pool::new_generation_async() {
   size_t sum = total_average_fitness();
   std::vector<std::pair<specie*, size_t>> breed_counts;
   for (auto &s : species) {
-    size_t breed = std::floor(((1. * s.average_fitness) / (1. * sum)) * 1. *
+    size_t breed = std::floor(((1. * s.average_fitness.load()) / (1. * sum)) * 1. *
                               speciating_parameters.population) -
                    1;
     breed_counts.push_back({&s, breed});
@@ -902,7 +902,7 @@ ethreads::coro_task<void> pool::new_generation_async() {
   // Cleanup channel
   species_chan.reset();
 
-  generation_number++;
+  generation_number.modify([](size_t &v) { ++v; });
 
   co_return;
 }
@@ -925,7 +925,7 @@ void pool::new_generation() {
   size_t sum = total_average_fitness();
   std::vector<std::pair<specie*, size_t>> breed_counts;
   for (auto &s : species) {
-    size_t breed = std::floor(((1. * s.average_fitness) / (1. * sum)) * 1. *
+    size_t breed = std::floor(((1. * s.average_fitness.load()) / (1. * sum)) * 1. *
                               speciating_parameters.population) -
                    1;
     breed_counts.push_back({&s, breed});
@@ -989,7 +989,7 @@ void pool::new_generation() {
   // Cleanup channel
   species_chan.reset();
 
-  generation_number++;
+  generation_number.modify([](size_t &v) { ++v; });
 }
 
 std::istream &operator>>(std::istream &input, pool &p) {

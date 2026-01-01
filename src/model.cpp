@@ -1,4 +1,3 @@
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -62,7 +61,7 @@ training_job_coro(std::vector<genome *>::iterator start,
 
 void model::train(std::size_t times) {
   // Use stored best fitness for comparison
-  size_t best_fitness = this->best_fitness.load();
+  size_t best_fitness = this->get_best_fitness();
   while (times-- > 0) {
     std::vector<genome *> genomes;
     for (auto &specie : this->p->species)
@@ -119,7 +118,7 @@ void model::train(std::size_t times) {
 
 ethreads::coro_task<void> model::train_async(std::size_t times) {
   // Use stored best fitness for comparison
-  size_t best_fitness = this->best_fitness.load();
+  size_t best_fitness = this->get_best_fitness();
 
   while (times-- > 0) {
     std::vector<genome *> genomes;
@@ -175,10 +174,7 @@ bool model::save_best() {
   std::ofstream of;
   of.open(name.data(), std::ios::trunc);
   zstream compressor(&of);
-  {
-    std::lock_guard<std::mutex> lock(best_mutex_);
-    compressor << best;
-  }
+  compressor << best_state_.load().best;
   compressor << std::flush;
   of.close();
   return true;
@@ -201,8 +197,9 @@ bool model::load_best(std::string file_name) {
   best_file.open(file_name.data());
   if (best_file.is_open()) {
     zstream decompressor(&best_file);
-    std::lock_guard<std::mutex> lock(best_mutex_);
-    decompressor >> this->best;
+    brain loaded_best;
+    decompressor >> loaded_best;
+    best_state_.store({loaded_best, 0});
     return true;
   }
 

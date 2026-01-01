@@ -1,7 +1,6 @@
 #ifndef ENEAT_POOL_HPP
 #define ENEAT_POOL_HPP
 
-#include <atomic>
 #include <cstddef>
 #include <list>
 #include <map>
@@ -15,6 +14,7 @@
 #include "innovation_channel.hpp"
 #include "mutation_rate_container.hpp"
 #include "network_info_container.hpp"
+#include "shared_state.hpp"
 #include "speciating_parameter_container.hpp"
 #include "species_channel.hpp"
 
@@ -39,8 +39,8 @@ struct pool {
   // Channel-based species management (lazy initialized)
   std::unique_ptr<eneat::species_channel> species_chan;
 
-  std::atomic<size_t> generation_number{1};
-  std::atomic<size_t> max_fitness{0};
+  ethreads::sync_shared_value<size_t> generation_number{1};
+  ethreads::sync_shared_value<size_t> max_fitness{0};
   mutation_rate_container mutation_rates;
   speciating_parameter_container speciating_parameters;
   network_info_container network_info;
