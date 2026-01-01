@@ -9,6 +9,7 @@
 #include <ostream>
 #include <stddef.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -84,6 +85,14 @@ void brain::operator=(const genome &g) {
   bias_neurons.clear();
   output_neurons.clear();
 
+  // Build a set of evolved bias neuron IDs from genes with is_bias_source flag
+  std::unordered_set<size_t> evolved_bias_set;
+  for (const auto &[_, gene] : g.genes) {
+    if (gene.is_bias_source) {
+      evolved_bias_set.insert(gene.from_node);
+    }
+  }
+
   neuron tmp;
   for (size_t i = 0; i < input_size; i++) {
     neurons.push_back(tmp);
@@ -111,13 +120,33 @@ void brain::operator=(const genome &g) {
       continue;
     neuron n;
     n.activation_function = it->second.activation;
+
+    // Check if from_node is an evolved bias neuron
     if (table.find(it->second.from_node) == table.end()) {
-      neurons.push_back(n);
-      table[it->second.from_node] = neurons.size() - 1;
+      if (evolved_bias_set.count(it->second.from_node)) {
+        n.type = BIAS;
+        neurons.push_back(n);
+        size_t idx = neurons.size() - 1;
+        table[it->second.from_node] = idx;
+        bias_neurons.push_back(idx);
+      } else {
+        neurons.push_back(n);
+        table[it->second.from_node] = neurons.size() - 1;
+      }
     }
+
+    // Check if to_node is an evolved bias neuron (unlikely but handle it)
     if (table.find(it->second.to_node) == table.end()) {
-      neurons.push_back(n);
-      table[it->second.to_node] = neurons.size() - 1;
+      if (evolved_bias_set.count(it->second.to_node)) {
+        n.type = BIAS;
+        neurons.push_back(n);
+        size_t idx = neurons.size() - 1;
+        table[it->second.to_node] = idx;
+        bias_neurons.push_back(idx);
+      } else {
+        neurons.push_back(n);
+        table[it->second.to_node] = neurons.size() - 1;
+      }
     }
   }
 

@@ -53,4 +53,20 @@ inline exfloat normalize(exfloat x, exfloat alpha = 1.0f) {
   return (alpha != 0.0f) ? x / alpha : 1.0f;
 }
 
+inline const char* activation_name(ai_func_type type) {
+  switch (type) {
+    case RELU:       return "ReLU";
+    case LINEAR:     return "Lin";
+    case HEAVISIDE:  return "Step";
+    case LOGISTIC:   return "Log";
+    case SIGMOID:    return "Sig";
+    case TANH:       return "Tanh";
+    case GELU:       return "GELU";
+    case SWISH:      return "Swsh";
+    case LEAKY_RELU: return "LReLU";
+    case NORMALIZE:  return "Norm";
+    default:         return "?";
+  }
+}
+
 #endif

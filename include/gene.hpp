@@ -11,6 +11,7 @@ struct gene {
   exfloat weight = 0.0f;
   ai_func_type activation = ai_func_type::RELU;
   bool enabled = true;
+  bool is_bias_source = false;  // true if from_node is an evolved bias neuron
 };
 
 #endif

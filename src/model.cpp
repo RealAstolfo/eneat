@@ -1,6 +1,8 @@
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -17,7 +19,7 @@
 #include "zstream.hpp"
 
 model::model(
-    const std::function<decltype(genome::fitness)(brain &)> &get_fitness,
+    const fitness_func_t &get_fitness,
     std::string &model_name)
     : get_fitness(get_fitness) {
   this->model_name = std::move(model_name);
@@ -31,35 +33,36 @@ model::model(
 }
 
 model::~model() {
-  save_best();
-  save_pool();
+  save_best();   // No-op if read_only_
+  save_pool();   // No-op if read_only_
 }
 
 // Coroutine-based training job for a batch of genomes
-ethreads::coro_task<std::pair<decltype(genome::fitness), genome *>>
+ethreads::coro_task<std::pair<size_t, genome *>>
 training_job_coro(std::vector<genome *>::iterator start,
                   std::vector<genome *>::iterator stop,
-                  std::function<decltype(genome::fitness)(brain &)> fit_func) {
+                  fitness_func_t fit_func) {
   genome *best_genome = *start;
-  decltype(genome::fitness) best_fitness = 0;
+  size_t best_fitness = 0;
 
   for (; start != stop; std::advance(start, 1)) {
     brain net;
     genome *const genome = *start;
     net = *genome;
-    genome->fitness = fit_func(net);
-    if (genome->fitness > best_fitness) {
-      best_fitness = genome->fitness;
+    size_t fitness = co_await fit_func(net);
+    genome->fitness.store(fitness);
+    if (fitness > best_fitness) {
+      best_fitness = fitness;
       best_genome = genome;
     }
   }
 
-  co_return std::pair<decltype(best_fitness), genome *>(best_fitness, best_genome);
+  co_return std::pair<size_t, genome *>(best_fitness, best_genome);
 }
 
 void model::train(std::size_t times) {
   // Use stored best fitness for comparison
-  decltype(genome::fitness) best_fitness = this->best_fitness.load();
+  size_t best_fitness = this->best_fitness.load();
   while (times-- > 0) {
     std::vector<genome *> genomes;
     for (auto &specie : this->p->species)
@@ -74,7 +77,7 @@ void model::train(std::size_t times) {
     genomes.erase(last, std::end(genomes));
 
     // Create coroutine tasks for parallel genome evaluation
-    std::vector<ethreads::coro_task<std::pair<decltype(genome::fitness), genome *>>> tasks;
+    std::vector<ethreads::coro_task<std::pair<size_t, genome *>>> tasks;
     const std::size_t num_threads = std::thread::hardware_concurrency();
     const std::size_t total_items = genomes.size();
 
@@ -104,8 +107,9 @@ void model::train(std::size_t times) {
       auto [fitness, genome] = task.get();
       if (fitness > best_fitness) {
         best_fitness = fitness;
-        this->best = *genome;
-        this->best_fitness.store(fitness);
+        brain net;
+        net = *genome;
+        this->set_best_brain(net, fitness);
       }
     }
 
@@ -115,7 +119,7 @@ void model::train(std::size_t times) {
 
 ethreads::coro_task<void> model::train_async(std::size_t times) {
   // Use stored best fitness for comparison
-  decltype(genome::fitness) best_fitness = this->best_fitness.load();
+  size_t best_fitness = this->best_fitness.load();
 
   while (times-- > 0) {
     std::vector<genome *> genomes;
@@ -136,7 +140,7 @@ ethreads::coro_task<void> model::train_async(std::size_t times) {
     }
 
     // Create evaluation tasks
-    std::vector<ethreads::coro_task<std::pair<decltype(genome::fitness), genome *>>> tasks;
+    std::vector<ethreads::coro_task<std::pair<size_t, genome *>>> tasks;
     const std::size_t num_threads = std::thread::hardware_concurrency();
     const std::size_t batch_size = (genomes.size() + num_threads - 1) / num_threads;
 
@@ -155,8 +159,9 @@ ethreads::coro_task<void> model::train_async(std::size_t times) {
     for (auto &[fitness, genome] : results) {
       if (fitness > best_fitness) {
         best_fitness = fitness;
-        this->best = *genome;
-        this->best_fitness.store(fitness);
+        brain net;
+        net = *genome;
+        this->set_best_brain(net, fitness);
       }
     }
 
@@ -165,17 +170,22 @@ ethreads::coro_task<void> model::train_async(std::size_t times) {
 }
 
 bool model::save_best() {
+  if (read_only_) return false;  // Don't save in read-only mode
   const std::string name = this->model_name + "_best";
   std::ofstream of;
   of.open(name.data(), std::ios::trunc);
   zstream compressor(&of);
-  compressor << best;
+  {
+    std::lock_guard<std::mutex> lock(best_mutex_);
+    compressor << best;
+  }
   compressor << std::flush;
   of.close();
   return true;
 }
 
 bool model::save_pool() {
+  if (read_only_) return false;  // Don't save in read-only mode
   const std::string name = this->model_name + "_pool";
   std::ofstream of;
   of.open(name.data(), std::ios::trunc);
@@ -187,10 +197,11 @@ bool model::save_pool() {
 }
 
 bool model::load_best(std::string file_name) {
-  std::ifstream best;
-  best.open(file_name.data());
-  if (best.is_open()) {
-    zstream decompressor(&best);
+  std::ifstream best_file;
+  best_file.open(file_name.data());
+  if (best_file.is_open()) {
+    zstream decompressor(&best_file);
+    std::lock_guard<std::mutex> lock(best_mutex_);
     decompressor >> this->best;
     return true;
   }

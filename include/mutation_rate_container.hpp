@@ -11,11 +11,12 @@ struct mutation_rate_container {
   exfloat crossover_chance = 0.75f;
   exfloat link_mutation_chance = 2.0f;
   exfloat neuron_mutation_chance = 0.05f;
-  exfloat bias_mutation_chance = 0.4f;
+  exfloat bias_mutation_chance = 0.4f;       // Chance to add connection FROM existing bias
+  exfloat bias_neuron_mutation_chance = 0.02f; // Chance to add NEW bias neuron
   exfloat step_size = 0.1f;
   exfloat disable_mutation_chance = 0.4f;
   exfloat enable_mutation_chance = 0.2f;
-  exfloat activation_mutation_chance = 0.25f;
+  exfloat activation_mutation_chance = 0.07f;
 };
 
 std::istream &operator>>(std::istream &input, mutation_rate_container &mrc);

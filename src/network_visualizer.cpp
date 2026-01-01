@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <queue>
+#include "rlgl.h"  // For rlEnableSmoothLines
 
 NetworkVisualizer::NetworkVisualizer(int width, int height)
     : width_(width), height_(height), window_open_(false) {}
@@ -12,12 +13,16 @@ NetworkVisualizer::~NetworkVisualizer() {
 
 void NetworkVisualizer::open() {
     if (!window_open_) {
-        // Prevent window resizing
-        SetConfigFlags(FLAG_WINDOW_ALWAYS_RUN);
+        // Enable MSAA for smoother lines and circles, keep window running when unfocused
+        SetConfigFlags(FLAG_WINDOW_ALWAYS_RUN | FLAG_MSAA_4X_HINT);
         InitWindow(width_, height_, "ENEAT Network Visualizer");
         SetWindowMinSize(width_, height_);
         SetWindowMaxSize(width_, height_);
         SetTargetFPS(60);
+
+        // Enable OpenGL smooth lines for better anti-aliasing
+        rlEnableSmoothLines();
+
         window_open_ = true;
     }
 }
@@ -81,6 +86,7 @@ Color NetworkVisualizer::type_to_border_color(neuron_place type) {
 
 std::vector<int> NetworkVisualizer::compute_depths(const brain& net) {
     std::vector<int> depth(net.neurons.size(), -1);
+    std::vector<bool> finalized(net.neurons.size(), false);
 
     // Build forward adjacency list (out_neurons) from in_neurons
     std::vector<std::vector<size_t>> out_neurons(net.neurons.size());
@@ -92,29 +98,38 @@ std::vector<int> NetworkVisualizer::compute_depths(const brain& net) {
         }
     }
 
-    // Initialize input/bias neurons at depth 0
+    // Bias neurons get special depth -2 (rendered separately at top)
+    // Input neurons start at depth 0
     std::queue<size_t> q;
     for (size_t i = 0; i < net.neurons.size(); i++) {
-        if (net.neurons[i].type == INPUT || net.neurons[i].type == BIAS) {
+        if (net.neurons[i].type == BIAS) {
+            depth[i] = -2;  // Special depth for bias neurons
+            q.push(i);      // Still process their connections
+        } else if (net.neurons[i].type == INPUT) {
             depth[i] = 0;
             q.push(i);
         }
     }
 
-    // BFS: propagate depth through connections
-    // For each neuron, depth = max(depth of all inputs) + 1
-    // Cap depth to prevent runaway in cyclic/recurrent networks
-    constexpr int MAX_DEPTH = 100;
-
+    // BFS with finalization to prevent infinite re-queuing in cycles
+    // Once a node is finalized, it won't be re-processed even if reached again
     while (!q.empty()) {
         size_t current = q.front();
         q.pop();
 
+        if (finalized[current]) continue;  // Already processed
+        finalized[current] = true;
+
+        // Bias neurons (depth -2) propagate as if at depth 0
+        int current_effective_depth = (depth[current] == -2) ? 0 : depth[current];
+
         for (size_t next : out_neurons[current]) {
-            int new_depth = depth[current] + 1;
-            if (new_depth > depth[next] && new_depth <= MAX_DEPTH) {
+            if (next == current || finalized[next]) continue;  // Skip self-loops and finalized nodes
+
+            int new_depth = current_effective_depth + 1;
+            if (new_depth > depth[next]) {
                 depth[next] = new_depth;
-                q.push(next);  // Re-process to propagate max depth
+                q.push(next);
             }
         }
     }
@@ -136,6 +151,14 @@ std::vector<int> NetworkVisualizer::compute_depths(const brain& net) {
         }
     }
 
+    // Fallback: any hidden neuron still at depth -1 goes to layer 1
+    // This handles neurons only reachable via recurrent connections
+    for (size_t i = 0; i < net.neurons.size(); i++) {
+        if (net.neurons[i].type == HIDDEN && depth[i] == -1) {
+            depth[i] = 1;
+        }
+    }
+
     return depth;
 }
 
@@ -146,31 +169,39 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
     const float screen_width = static_cast<float>(GetScreenWidth());
     const float screen_height = static_cast<float>(GetScreenHeight());
 
-    // Layout constants
-    const float MIN_SPACING = 8.0f;   // Minimum spacing for scale calculation
-    const float NEURON_RADIUS = 6.0f; // Base neuron radius
-    const float MARGIN = 60.0f;       // Increased margin for safety
-    const float BOTTOM_RESERVE = 50.0f;  // Reserve for info text
-
-    // Fixed Y bounds for ALL layers (with margin)
-    const float top_y = MARGIN;
-    const float bottom_y = screen_height - MARGIN - BOTTOM_RESERVE;
-    const float available_height = bottom_y - top_y;
-    const float available_width = screen_width - 2 * MARGIN;
+    // Layout constants (same margins as before)
+    const float BASE_CELL_SIZE = 20.0f;   // Base grid cell size for hidden layers
+    const float MARGIN = 60.0f;           // Screen margin
+    const float BOTTOM_RESERVE = 50.0f;   // Reserve for info text
+    const float BIAS_ROW_HEIGHT = 30.0f;  // Space for horizontal bias row at top
 
     // Compute topological depth for each neuron
     auto depths = compute_depths(net);
 
-    // Find max depth (number of layers - 1)
+    // Collect bias neurons (depth = -2) separately
+    std::vector<size_t> bias_neurons;
+    for (size_t i = 0; i < net.neurons.size(); i++) {
+        if (depths[i] == -2) {
+            bias_neurons.push_back(i);
+        }
+    }
+
+    // Fixed Y bounds for main network (below bias row)
+    const float bias_y = MARGIN;  // Bias neurons at top
+    const float top_y = MARGIN + BIAS_ROW_HEIGHT;  // Main network starts below bias
+    const float bottom_y = screen_height - MARGIN - BOTTOM_RESERVE;
+    const float available_height = bottom_y - top_y;
+    const float available_width = screen_width - 2 * MARGIN;
+
+    // Find max depth (number of layers - 1), excluding bias neurons
     int max_depth = 0;
     for (int d : depths) {
         if (d > max_depth) max_depth = d;
     }
-    // Safety clamp to prevent huge allocations
-    max_depth = std::min(max_depth, 100);
+    max_depth = std::min(max_depth, 100);  // Safety clamp
     if (max_depth < 1) max_depth = 1;
 
-    // Group neurons by their depth (layer)
+    // Group neurons by their depth (layer), excluding bias (depth -2)
     std::vector<std::vector<size_t>> layers(max_depth + 1);
     for (size_t i = 0; i < net.neurons.size(); i++) {
         int d = depths[i];
@@ -179,52 +210,146 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
         }
     }
 
-    // Find the tallest layer for scale calculation
-    size_t max_layer_size = 1;
-    for (const auto& layer : layers) {
-        if (layer.size() > max_layer_size) {
-            max_layer_size = layer.size();
+    // Find max neurons in any hidden layer (for grid scaling)
+    size_t max_hidden_layer_size = 1;
+    for (int layer_idx = 1; layer_idx < max_depth; layer_idx++) {
+        if (layers[layer_idx].size() > max_hidden_layer_size) {
+            max_hidden_layer_size = layers[layer_idx].size();
         }
     }
 
-    // Calculate scale based on minimum spacing needed in tallest layer
-    float min_spacing_needed = 2 * NEURON_RADIUS + MIN_SPACING;
-    float actual_spacing = (max_layer_size > 1) ? (available_height / (max_layer_size - 1)) : available_height;
-    out_scale = std::min(1.0f, actual_spacing / min_spacing_needed);
+    // Calculate scale: ensure all neurons in tallest hidden layer fit
+    // Each neuron needs BASE_CELL_SIZE vertical space
+    float needed_height = max_hidden_layer_size * BASE_CELL_SIZE;
+    out_scale = std::min(1.0f, available_height / needed_height);
 
-    // Position neurons by layer
-    // X: evenly distribute layers across available width
-    // Y: ALL layers span from top_y to bottom_y (aligned top/bottom)
-    for (int layer_idx = 0; layer_idx <= max_depth; layer_idx++) {
-        const auto& layer = layers[layer_idx];
-        if (layer.empty()) continue;
+    // Actual cell size after scaling
+    float cell_size = BASE_CELL_SIZE * out_scale;
 
-        // X position: linear interpolation from left margin to right margin
-        float x = MARGIN + (static_cast<float>(layer_idx) / max_depth) * available_width;
+    // Count hidden layers for X positioning
+    int hidden_layer_count = 0;
+    for (int layer_idx = 1; layer_idx < max_depth; layer_idx++) {
+        if (!layers[layer_idx].empty()) {
+            hidden_layer_count++;
+        }
+    }
 
-        size_t layer_size = layer.size();
+    // Position INPUT layer (layer 0) - spans full height like before
+    if (!layers[0].empty()) {
+        float x = MARGIN;
+        size_t layer_size = layers[0].size();
         if (layer_size == 1) {
-            // Single neuron: center vertically
-            positions[layer[0]] = {x, (top_y + bottom_y) / 2.0f};
+            positions[layers[0][0]] = {x, (top_y + bottom_y) / 2.0f};
         } else {
-            // Multiple neurons: distribute evenly from top_y to bottom_y
             float spacing = available_height / (layer_size - 1);
             for (size_t i = 0; i < layer_size; i++) {
                 float y = top_y + i * spacing;
-                positions[layer[i]] = {x, y};
+                positions[layers[0][i]] = {x, y};
             }
         }
     }
 
-    // Handle disconnected neurons (depth = -1) - place them at far right, also spanning full height
+    // Position OUTPUT layer (layer max_depth) - spans full height like before
+    if (!layers[max_depth].empty()) {
+        float x = MARGIN + available_width;
+        size_t layer_size = layers[max_depth].size();
+        if (layer_size == 1) {
+            positions[layers[max_depth][0]] = {x, (top_y + bottom_y) / 2.0f};
+        } else {
+            float spacing = available_height / (layer_size - 1);
+            for (size_t i = 0; i < layer_size; i++) {
+                float y = top_y + i * spacing;
+                positions[layers[max_depth][i]] = {x, y};
+            }
+        }
+    }
+
+    // Position HIDDEN layers on a grid (centered vertically)
+    if (hidden_layer_count > 0) {
+        // X spacing: distribute hidden layers between input and output
+        float hidden_start_x = MARGIN + available_width * 0.1f;  // 10% from input
+        float hidden_end_x = MARGIN + available_width * 0.9f;    // 10% from output
+        float hidden_width = hidden_end_x - hidden_start_x;
+
+        int hidden_idx = 0;
+        for (int layer_idx = 1; layer_idx < max_depth; layer_idx++) {
+            const auto& layer = layers[layer_idx];
+            if (layer.empty()) continue;
+
+            // X position for this hidden layer
+            float x = (hidden_layer_count == 1)
+                ? (hidden_start_x + hidden_end_x) / 2.0f
+                : hidden_start_x + (static_cast<float>(hidden_idx) / (hidden_layer_count - 1)) * hidden_width;
+
+            // Y positions: grid cells centered vertically
+            size_t layer_size = layer.size();
+            float grid_height = layer_size * cell_size;
+            float grid_start_y = top_y + (available_height - grid_height) / 2.0f;
+
+            for (size_t i = 0; i < layer_size; i++) {
+                float y = grid_start_y + i * cell_size + cell_size / 2.0f;
+                positions[layer[i]] = {x, y};
+            }
+
+            hidden_idx++;
+        }
+    }
+
+    // Position bias neurons horizontally at the top, aligned with hidden layers
+    if (!bias_neurons.empty()) {
+        size_t bias_count = bias_neurons.size();
+
+        if (hidden_layer_count > 0 && bias_count <= static_cast<size_t>(hidden_layer_count)) {
+            // Align bias neurons with hidden layer columns
+            std::vector<float> hidden_x_positions;
+            float hidden_start_x = MARGIN + available_width * 0.1f;
+            float hidden_end_x = MARGIN + available_width * 0.9f;
+            float hidden_width = hidden_end_x - hidden_start_x;
+
+            int hidden_idx = 0;
+            for (int layer_idx = 1; layer_idx < max_depth; layer_idx++) {
+                if (!layers[layer_idx].empty()) {
+                    float x = (hidden_layer_count == 1)
+                        ? (hidden_start_x + hidden_end_x) / 2.0f
+                        : hidden_start_x + (static_cast<float>(hidden_idx) / (hidden_layer_count - 1)) * hidden_width;
+                    hidden_x_positions.push_back(x);
+                    hidden_idx++;
+                }
+            }
+
+            for (size_t i = 0; i < bias_count; i++) {
+                size_t x_idx = (hidden_x_positions.size() > 1)
+                    ? (i * (hidden_x_positions.size() - 1)) / (bias_count > 1 ? bias_count - 1 : 1)
+                    : 0;
+                x_idx = std::min(x_idx, hidden_x_positions.size() - 1);
+                positions[bias_neurons[i]] = {hidden_x_positions[x_idx], bias_y};
+            }
+        } else {
+            // No hidden layers or more bias than hidden: spread evenly
+            float bias_left = MARGIN + available_width * 0.15f;
+            float bias_right = MARGIN + available_width * 0.85f;
+            float bias_width = bias_right - bias_left;
+
+            if (bias_count == 1) {
+                positions[bias_neurons[0]] = {(bias_left + bias_right) / 2.0f, bias_y};
+            } else {
+                for (size_t i = 0; i < bias_count; i++) {
+                    float x = bias_left + (static_cast<float>(i) / (bias_count - 1)) * bias_width;
+                    positions[bias_neurons[i]] = {x, bias_y};
+                }
+            }
+        }
+    }
+
+    // Handle disconnected neurons (depth = -1) - place them at far right
     std::vector<size_t> disconnected;
     for (size_t i = 0; i < net.neurons.size(); i++) {
-        if (depths[i] < 0) {
+        if (depths[i] == -1) {
             disconnected.push_back(i);
         }
     }
     if (!disconnected.empty()) {
-        float x = MARGIN + available_width + 30; // Past the output layer
+        float x = MARGIN + available_width + 30;
         size_t disc_size = disconnected.size();
         if (disc_size == 1) {
             positions[disconnected[0]] = {x, (top_y + bottom_y) / 2.0f};
@@ -274,7 +399,8 @@ void NetworkVisualizer::render(const brain& net) {
                 const auto& from_pos = positions[from_idx];
 
                 Color line_color = weight_to_color(weight);
-                float thickness = std::clamp(std::abs(weight) * 2.0f * scale, 0.5f, 3.0f);
+                // Minimum 1.0 thickness for better visibility with MSAA
+                float thickness = std::clamp(std::abs(weight) * 2.0f * scale, 1.0f, 4.0f);
 
                 DrawLineEx(
                     Vector2{from_pos.x, from_pos.y},
@@ -318,7 +444,7 @@ void NetworkVisualizer::render(const brain& net) {
     // Call label callback if set (allows custom labels to be drawn)
     if (label_callback_) {
         for (size_t i = 0; i < net.neurons.size(); i++) {
-            label_callback_(i, positions[i].x, positions[i].y, net.neurons[i].value);
+            label_callback_(i, positions[i].x, positions[i].y, net.neurons[i]);
         }
     }
 

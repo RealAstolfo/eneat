@@ -6,8 +6,8 @@
 #include "brain.hpp"
 #include "raylib.h"
 
-// Callback receives: neuron index, x position, y position, neuron value
-using NeuronLabelCallback = std::function<void(size_t idx, float x, float y, float value)>;
+// Callback receives: neuron index, x position, y position, neuron reference
+using NeuronLabelCallback = std::function<void(size_t idx, float x, float y, const neuron& n)>;
 
 class NetworkVisualizer {
 public:

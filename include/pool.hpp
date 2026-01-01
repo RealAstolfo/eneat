@@ -39,7 +39,6 @@ struct pool {
   // Channel-based species management (lazy initialized)
   std::unique_ptr<eneat::species_channel> species_chan;
 
-  std::map<std::pair<size_t, size_t>, size_t> track;
   std::atomic<size_t> generation_number{1};
   std::atomic<size_t> max_fitness{0};
   mutation_rate_container mutation_rates;
@@ -59,6 +58,7 @@ struct pool {
   ethreads::coro_task<void> mutate_enable_disable(genome &g, const bool &enable);
   ethreads::coro_task<void> mutate_link(genome &g, const bool &force_bias);
   ethreads::coro_task<void> mutate_neuron(genome &g);
+  ethreads::coro_task<void> mutate_bias_neuron(genome &g);  // Add new bias neuron
   ethreads::coro_task<void> mutate(genome &g);
 
   // Synchronous mutation for single-threaded initialization

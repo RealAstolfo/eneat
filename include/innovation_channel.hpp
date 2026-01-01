@@ -37,10 +37,10 @@ public:
   // Synchronous request (blocks until response) - requires service running
   size_t request_innovation_sync(size_t from_node, size_t to_node) {
     std::atomic<bool> done{false};
-    size_t result = 0;
+    std::atomic<size_t> result{0};
 
     request_innovation(from_node, to_node, [&](size_t inn_num) {
-      result = inn_num;
+      result.store(inn_num, std::memory_order_relaxed);
       done.store(true, std::memory_order_release);
     });
 
@@ -49,17 +49,17 @@ public:
       std::this_thread::yield();
     }
 
-    return result;
+    return result.load(std::memory_order_relaxed);
   }
 
   // Coroutine-friendly request - yields while waiting
   ethreads::coro_task<size_t> request_innovation_async(size_t from_node,
                                                         size_t to_node) {
     std::atomic<bool> done{false};
-    size_t result = 0;
+    std::atomic<size_t> result{0};
 
     request_innovation(from_node, to_node, [&](size_t inn_num) {
-      result = inn_num;
+      result.store(inn_num, std::memory_order_relaxed);
       done.store(true, std::memory_order_release);
     });
 
@@ -68,7 +68,7 @@ public:
       co_await ethreads::yield();
     }
 
-    co_return result;
+    co_return result.load(std::memory_order_relaxed);
   }
 
   // Process pending requests (call from service coroutine)
