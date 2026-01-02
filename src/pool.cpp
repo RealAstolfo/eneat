@@ -48,25 +48,180 @@ std::vector<std::pair<specie *, genome *>> pool::get_genomes() {
   return result;
 }
 
+// Default crossover - delegates to multipoint
 genome pool::crossover(const genome &g1, const genome &g2) {
+  return crossover_multipoint(g1, g2);
+}
+
+// Multipoint crossover: randomly select from matching genes, take excess from fitter parent
+genome pool::crossover_multipoint(const genome &g1, const genome &g2) {
+  // Ensure g1 is the fitter parent (or smaller if equal fitness)
   if (g2.fitness.load() > g1.fitness.load())
-    return crossover(g2, g1);
+    return crossover_multipoint(g2, g1);
+  if (g2.fitness.load() == g1.fitness.load() && g2.genes.size() < g1.genes.size())
+    return crossover_multipoint(g2, g1);
+
   genome child(network_info, mutation_rates);
-  auto it1 = g1.genes.begin();
+  // Average traits from both parents
+  for (size_t i = 0; i < std::min(g1.traits.size(), g2.traits.size()); i++) {
+    child.traits.push_back(eneat::trait::average(g1.traits[i], g2.traits[i]));
+  }
+  // Copy remaining traits from fitter parent
+  for (size_t i = child.traits.size(); i < g1.traits.size(); i++) {
+    child.traits.push_back(g1.traits[i]);
+  }
+
   std::uniform_int_distribution<int> coin_flip(1, 2);
-  for (; it1 != g1.genes.end(); it1++) {
+  std::uniform_real_distribution<exfloat> prob_dist(0.0f, 1.0f);
+
+  for (auto it1 = g1.genes.begin(); it1 != g1.genes.end(); it1++) {
     auto it2 = g2.genes.find(it1->second.innovation_num);
+    gene child_gene;
+
     if (it2 != g2.genes.end()) {
+      // Matching gene - randomly select from either parent
       int coin = eneat::get_rand(coin_flip);
       if (coin == 2)
-        child.genes[it1->second.innovation_num] = it2->second;
+        child_gene = it2->second;
       else
-        child.genes[it1->second.innovation_num] = it1->second;
-    } else
-      child.genes[it1->second.innovation_num] = it1->second;
+        child_gene = it1->second;
+
+      // 75% disabled rule: if either parent has gene disabled, 75% chance child inherits disabled
+      if (!it1->second.enabled || !it2->second.enabled) {
+        if (eneat::get_rand(prob_dist) < 0.75f) {
+          child_gene.enabled = false;
+        }
+      }
+    } else {
+      // Disjoint/excess gene - take from fitter parent (g1)
+      child_gene = it1->second;
+    }
+
+    child.genes[child_gene.innovation_num] = child_gene;
   }
 
   child.max_neuron = std::max(g1.max_neuron, g2.max_neuron);
+  child.can_be_recurrent = g1.can_be_recurrent || g2.can_be_recurrent;
+  return child;
+}
+
+// Multipoint average crossover: average weights of matching genes
+genome pool::crossover_multipoint_avg(const genome &g1, const genome &g2) {
+  // Ensure g1 is the fitter parent
+  if (g2.fitness.load() > g1.fitness.load())
+    return crossover_multipoint_avg(g2, g1);
+  if (g2.fitness.load() == g1.fitness.load() && g2.genes.size() < g1.genes.size())
+    return crossover_multipoint_avg(g2, g1);
+
+  genome child(network_info, mutation_rates);
+  // Average traits
+  for (size_t i = 0; i < std::min(g1.traits.size(), g2.traits.size()); i++) {
+    child.traits.push_back(eneat::trait::average(g1.traits[i], g2.traits[i]));
+  }
+  for (size_t i = child.traits.size(); i < g1.traits.size(); i++) {
+    child.traits.push_back(g1.traits[i]);
+  }
+
+  std::uniform_real_distribution<exfloat> prob_dist(0.0f, 1.0f);
+  std::uniform_int_distribution<int> coin_flip(1, 2);
+
+  for (auto it1 = g1.genes.begin(); it1 != g1.genes.end(); it1++) {
+    auto it2 = g2.genes.find(it1->second.innovation_num);
+    gene child_gene;
+
+    if (it2 != g2.genes.end()) {
+      // Matching gene - average weights
+      child_gene = it1->second;
+      child_gene.weight = (it1->second.weight + it2->second.weight) / 2.0f;
+      child_gene.mutation_num = (it1->second.mutation_num + it2->second.mutation_num) / 2.0f;
+
+      // Randomly pick activation function
+      if (eneat::get_rand(coin_flip) == 2) {
+        child_gene.activation = it2->second.activation;
+      }
+
+      // 75% disabled rule
+      if (!it1->second.enabled || !it2->second.enabled) {
+        if (eneat::get_rand(prob_dist) < 0.75f) {
+          child_gene.enabled = false;
+        }
+      }
+    } else {
+      child_gene = it1->second;
+    }
+
+    child.genes[child_gene.innovation_num] = child_gene;
+  }
+
+  child.max_neuron = std::max(g1.max_neuron, g2.max_neuron);
+  child.can_be_recurrent = g1.can_be_recurrent || g2.can_be_recurrent;
+  return child;
+}
+
+// Single-point crossover: select crossover point, take genes from each parent
+genome pool::crossover_singlepoint(const genome &g1, const genome &g2) {
+  genome child(network_info, mutation_rates);
+
+  // Average traits
+  for (size_t i = 0; i < std::min(g1.traits.size(), g2.traits.size()); i++) {
+    child.traits.push_back(eneat::trait::average(g1.traits[i], g2.traits[i]));
+  }
+
+  // Find crossover point in the smaller genome
+  size_t smaller_size = std::min(g1.genes.size(), g2.genes.size());
+  if (smaller_size == 0) {
+    child.max_neuron = std::max(g1.max_neuron, g2.max_neuron);
+    return child;
+  }
+
+  std::uniform_int_distribution<size_t> point_dist(0, smaller_size - 1);
+  size_t crossover_point = eneat::get_rand(point_dist);
+
+  std::uniform_real_distribution<exfloat> prob_dist(0.0f, 1.0f);
+
+  // Get iterators
+  auto it1 = g1.genes.begin();
+  auto it2 = g2.genes.begin();
+
+  // Take genes before crossover point from g1, after from g2
+  size_t index = 0;
+  while (it1 != g1.genes.end() || it2 != g2.genes.end()) {
+    gene child_gene;
+    bool use_g1 = (index < crossover_point);
+
+    if (it1 != g1.genes.end() && it2 != g2.genes.end()) {
+      if (it1->second.innovation_num == it2->second.innovation_num) {
+        // Matching gene
+        child_gene = use_g1 ? it1->second : it2->second;
+        // 75% disabled rule
+        if (!it1->second.enabled || !it2->second.enabled) {
+          if (eneat::get_rand(prob_dist) < 0.75f) {
+            child_gene.enabled = false;
+          }
+        }
+        ++it1;
+        ++it2;
+      } else if (it1->second.innovation_num < it2->second.innovation_num) {
+        child_gene = it1->second;
+        ++it1;
+      } else {
+        child_gene = it2->second;
+        ++it2;
+      }
+    } else if (it1 != g1.genes.end()) {
+      child_gene = it1->second;
+      ++it1;
+    } else {
+      child_gene = it2->second;
+      ++it2;
+    }
+
+    child.genes[child_gene.innovation_num] = child_gene;
+    index++;
+  }
+
+  child.max_neuron = std::max(g1.max_neuron, g2.max_neuron);
+  child.can_be_recurrent = g1.can_be_recurrent || g2.can_be_recurrent;
   return child;
 }
 
@@ -85,11 +240,19 @@ ethreads::coro_task<void> pool::mutate_weight(genome &g) {
   exfloat step = mutation_rates.step_size;
   std::uniform_real_distribution<exfloat> real_distributor(0.0f, 1.0f);
   for (auto it = g.genes.begin(); it != g.genes.end(); it++) {
-    if (eneat::get_rand(real_distributor) < mutation_rates.perturb_chance)
+    // Skip frozen genes (cannot be mutated)
+    if (it->second.frozen)
+      continue;
+
+    if (eneat::get_rand(real_distributor) < mutation_rates.perturb_chance) {
       it->second.weight +=
           eneat::get_rand(real_distributor) * step * 2.0f - step;
-    else
+    } else {
       it->second.weight = eneat::get_rand(real_distributor) * 4.0f - 2.0f;
+    }
+
+    // Track mutation for compatibility distance calculation
+    it->second.mutation_num += 1.0f;
   }
   co_return;
 }
@@ -142,25 +305,33 @@ ethreads::coro_task<void> pool::mutate_link(genome &g, const bool &force_bias) {
   }
   if (!g.network_info.recurrent) {
     bool has_recurrence = false;
+    // Bias and input nodes cannot create cycles when used as source
     if (is_bias(neuron1, network_info) || is_input(neuron1, network_info))
       has_recurrence = false;
     else {
+      // Build adjacency list of current connections
       std::unordered_map<size_t, std::vector<size_t>> connections;
       for (const auto &gene : g.genes) {
-        connections[gene.second.from_node].push_back(gene.second.to_node);
+        if (gene.second.enabled) {
+          connections[gene.second.from_node].push_back(gene.second.to_node);
+        }
       }
+      // Add the proposed new connection
       connections[neuron1].push_back(neuron2);
 
+      // BFS from neuron2 (destination) to check if we can reach neuron1 (source)
+      // If we can, adding neuron1->neuron2 would create a cycle
       std::queue<size_t> que;
-      que.push(neuron1);
+      que.push(neuron2);  // Start from destination
       std::unordered_set<size_t> visited;
-      visited.insert(neuron1);
+      visited.insert(neuron2);
       has_recurrence = false;
 
       while (!que.empty()) {
         size_t tmp = que.front();
         que.pop();
 
+        // If we reach the source from the destination, it's a cycle
         if (tmp == neuron1) {
           has_recurrence = true;
           break;
@@ -212,8 +383,9 @@ ethreads::coro_task<void> pool::mutate_neuron(genome &g) {
   gene new_gene1;
   new_gene1.from_node = it->second.from_node;
   new_gene1.to_node = g.max_neuron - 1;
-  std::uniform_real_distribution<exfloat> weight_generator(0.0f, 1.0f);
-  new_gene1.weight = eneat::get_rand(weight_generator);
+  // Per NEAT paper: first link (input -> new node) has weight 1.0
+  // This preserves network behavior initially
+  new_gene1.weight = 1.0f;
   std::uniform_int_distribution<size_t> act_dist(ai_func_type::FIRST,
                                                  ai_func_type::LAST);
   new_gene1.activation = (ai_func_type)eneat::get_rand(act_dist);
@@ -525,62 +697,101 @@ void pool::mutate_sync(genome &g) {
   }
 }
 
+// Disjoint genes: genes present in one genome but not the other,
+// within the range of both genomes' innovation numbers
 exfloat pool::disjoint(const genome &g1, const genome &g2) {
-  std::deque<size_t> genes1(g1.genes.size());
-  std::deque<size_t> genes2(g2.genes.size());
+  if (g1.genes.empty() || g2.genes.empty())
+    return 0.0f;
 
-  // std::map should be pre-sorted.
-  std::transform(g1.genes.begin(), g1.genes.end(), genes1.begin(),
-                 [](const auto &gene) { return gene.second.innovation_num; });
-
-  std::transform(g2.genes.begin(), g2.genes.end(), genes2.begin(),
-                 [](const auto &gene) { return gene.second.innovation_num; });
+  // Get max innovation number in each genome
+  size_t max_innov1 = g1.genes.rbegin()->second.innovation_num;
+  size_t max_innov2 = g2.genes.rbegin()->second.innovation_num;
+  size_t min_max = std::min(max_innov1, max_innov2);
 
   size_t disjoint_count = 0;
-  size_t i = 0;
-  size_t j = 0;
+  auto it1 = g1.genes.begin();
+  auto it2 = g2.genes.begin();
 
-  while (i < genes1.size() && j < genes2.size()) {
-    if (genes1[i] < genes2[j]) {
-      disjoint_count++;
-      i++;
-    } else if (genes1[i] > genes2[j]) {
-      disjoint_count++;
-      j++;
+  while (it1 != g1.genes.end() && it2 != g2.genes.end()) {
+    size_t innov1 = it1->second.innovation_num;
+    size_t innov2 = it2->second.innovation_num;
+
+    if (innov1 == innov2) {
+      ++it1;
+      ++it2;
+    } else if (innov1 < innov2) {
+      // Gene in g1 not in g2, check if within range
+      if (innov1 <= min_max)
+        disjoint_count++;
+      ++it1;
     } else {
-      i++;
-      j++;
+      // Gene in g2 not in g1, check if within range
+      if (innov2 <= min_max)
+        disjoint_count++;
+      ++it2;
     }
   }
 
-  disjoint_count += genes1.size() - i + genes2.size() - j;
-  size_t gene_size = std::max(genes1.size(), genes2.size());
-
-  return static_cast<exfloat>(disjoint_count) / static_cast<exfloat>(gene_size);
+  // Don't count remaining genes as disjoint - they're excess
+  return static_cast<exfloat>(disjoint_count);
 }
 
-exfloat pool::weights(const genome &g1, const genome &g2) {
-  auto it1 = g1.genes.begin();
-  exfloat sum = 0.0;
+// Excess genes: genes beyond the max innovation number of the other genome
+exfloat pool::excess(const genome &g1, const genome &g2) {
+  if (g1.genes.empty() || g2.genes.empty())
+    return static_cast<exfloat>(g1.genes.size() + g2.genes.size());
+
+  size_t max_innov1 = g1.genes.rbegin()->second.innovation_num;
+  size_t max_innov2 = g2.genes.rbegin()->second.innovation_num;
+
+  size_t excess_count = 0;
+
+  // Count genes in g1 beyond g2's max innovation
+  for (auto it = g1.genes.rbegin(); it != g1.genes.rend(); ++it) {
+    if (it->second.innovation_num > max_innov2)
+      excess_count++;
+    else
+      break;
+  }
+
+  // Count genes in g2 beyond g1's max innovation
+  for (auto it = g2.genes.rbegin(); it != g2.genes.rend(); ++it) {
+    if (it->second.innovation_num > max_innov1)
+      excess_count++;
+    else
+      break;
+  }
+
+  return static_cast<exfloat>(excess_count);
+}
+
+// Mutation number difference (rtNEAT-style):
+// Average difference in mutation_num for matching genes
+exfloat pool::mut_diff(const genome &g1, const genome &g2) {
+  exfloat sum = 0.0f;
   size_t coincident = 0;
-  for (; it1 != g1.genes.end(); it1++) {
-    auto it2 = g2.genes.find((*it1).second.innovation_num);
+
+  for (auto it1 = g1.genes.begin(); it1 != g1.genes.end(); ++it1) {
+    auto it2 = g2.genes.find(it1->second.innovation_num);
     if (it2 != g2.genes.end()) {
       coincident++;
-      sum += std::abs((*it1).second.weight - (*it2).second.weight);
+      sum += std::abs(it1->second.mutation_num - it2->second.mutation_num);
     }
   }
 
   if (coincident == 0)
-    return 0.0f;  // No common genes - let disjoint() handle the difference
+    return 0.0f;
 
-  return 1.0f * sum / (1.0f * coincident);
+  return sum / static_cast<exfloat>(coincident);
 }
 
+// rtNEAT-style compatibility distance:
+// delta_disjoint * D + delta_excess * E + delta_weights * W
 bool pool::is_same_species(const genome &g1, const genome &g2) {
   const exfloat dd = speciating_parameters.delta_disjoint * disjoint(g1, g2);
-  exfloat dw = speciating_parameters.delta_weights * weights(g1, g2);
-  return dd + dw < speciating_parameters.delta_threshold;
+  const exfloat de = speciating_parameters.delta_excess * excess(g1, g2);
+  const exfloat dw = speciating_parameters.delta_weights * mut_diff(g1, g2);
+  return dd + de + dw < speciating_parameters.delta_threshold;
 }
 
 void pool::rank_globally() {
@@ -1013,6 +1224,202 @@ void pool::new_generation() {
   species_chan.reset();
 
   generation_number.modify([](size_t &v) { ++v; });
+}
+
+// ============================================================================
+// rtNEAT Methods - Real-time evolution support
+// ============================================================================
+
+// rtNEAT: Adjust fitness with age penalties and bonuses
+void pool::adjust_species_fitness(specie &s) {
+  s.genomes.modify([&](std::vector<genome> &gs) {
+    for (auto &g : gs) {
+      exfloat fitness = static_cast<exfloat>(g.fitness.load());
+
+      // Age penalty for stagnant species
+      if (s.age > speciating_parameters.dropoff_age) {
+        size_t age_debt = s.age - s.age_of_last_improvement;
+        if (age_debt >= speciating_parameters.dropoff_age) {
+          // Extreme penalty for very old species without improvement
+          fitness *= 0.01f;
+        }
+      }
+
+      // Age bonus for young species (first 10 generations)
+      if (s.age <= 10) {
+        fitness *= speciating_parameters.age_significance;
+      }
+
+      // Ensure fitness doesn't go negative
+      if (fitness < 0.0001f) fitness = 0.0001f;
+
+      // Fitness sharing: divide by species size
+      fitness /= static_cast<exfloat>(gs.size());
+
+      g.adjusted_fitness.store(static_cast<size_t>(fitness));
+    }
+  });
+}
+
+// rtNEAT: Roulette wheel species selection based on average_est
+specie* pool::choose_parent_species() {
+  if (species.empty()) return nullptr;
+
+  // Calculate total average estimate
+  size_t total = 0;
+  for (auto &s : species) {
+    total += s.average_est.load();
+  }
+
+  if (total == 0) {
+    // If no estimates, choose randomly
+    std::uniform_int_distribution<size_t> dist(0, species.size() - 1);
+    auto it = species.begin();
+    std::advance(it, eneat::get_rand(dist));
+    return &(*it);
+  }
+
+  // Roulette wheel selection
+  std::uniform_int_distribution<size_t> dist(0, total - 1);
+  size_t marble = eneat::get_rand(dist);
+  size_t accumulated = 0;
+
+  for (auto &s : species) {
+    accumulated += s.average_est.load();
+    if (accumulated > marble) {
+      return &s;
+    }
+  }
+
+  // Fallback to last species
+  return &species.back();
+}
+
+// rtNEAT: Estimate running average for each species (only mature organisms)
+void pool::estimate_all_averages() {
+  for (auto &s : species) {
+    size_t sum = 0;
+    size_t count = 0;
+
+    // Load genomes and iterate (read-only access)
+    auto genomes_copy = s.genomes.load();
+    for (const auto &g : genomes_copy) {
+      if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
+        sum += g.fitness.load();
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      s.average_est.store(sum / count);
+    } else {
+      s.average_est.store(0);
+    }
+  }
+}
+
+// rtNEAT: Age all organisms (increment time_alive)
+void pool::age_all_organisms() {
+  for (auto &s : species) {
+    s.genomes.modify([](std::vector<genome> &gs) {
+      for (auto &g : gs) {
+        g.age();
+      }
+    });
+    s.increment_age();
+  }
+}
+
+// rtNEAT: Remove worst organism (lowest adjusted fitness among mature organisms)
+ethreads::coro_task<void> pool::remove_worst_async() {
+  specie* worst_species = nullptr;
+  size_t worst_idx = 0;
+  size_t min_fitness = std::numeric_limits<size_t>::max();
+
+  // Find worst organism among mature ones
+  for (auto &s : species) {
+    auto genomes_copy = s.genomes.load();
+    for (size_t i = 0; i < genomes_copy.size(); i++) {
+      const auto &g = genomes_copy[i];
+      if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
+        size_t adj = g.adjusted_fitness.load();
+        if (adj < min_fitness) {
+          min_fitness = adj;
+          worst_species = &s;
+          worst_idx = i;
+        }
+      }
+    }
+  }
+
+  // Remove worst organism
+  if (worst_species) {
+    worst_species->genomes.modify([worst_idx](std::vector<genome> &gs) {
+      if (worst_idx < gs.size()) {
+        gs.erase(gs.begin() + static_cast<std::ptrdiff_t>(worst_idx));
+      }
+    });
+
+    // Remove empty species
+    species.remove_if([](const specie &s) {
+      return s.genomes.load().empty();
+    });
+  }
+
+  co_return;
+}
+
+// rtNEAT: Produce single offspring (continuous evolution)
+ethreads::coro_task<genome> pool::reproduce_one_async() {
+  // Choose parent species based on fitness
+  specie* parent_species = choose_parent_species();
+
+  if (!parent_species) {
+    // No species - return empty genome
+    co_return genome(network_info, mutation_rates);
+  }
+
+  // Breed a child from the chosen species
+  genome child = co_await breed_child(*parent_species);
+
+  // Apply mutations
+  co_await mutate(child);
+
+  // Reset time_alive for new organism
+  child.time_alive.store(0);
+
+  co_return child;
+}
+
+// rtNEAT: Trait mutation - perturb random trait's parameters
+ethreads::coro_task<void> pool::mutate_random_trait(genome &g) {
+  if (g.traits.empty()) co_return;
+
+  std::uniform_int_distribution<size_t> trait_dist(0, g.traits.size() - 1);
+  size_t trait_idx = eneat::get_rand(trait_dist);
+
+  g.traits[trait_idx].mutate(
+      mutation_rates.trait_param_mutation_power,
+      0.5f  // 50% chance per parameter
+  );
+
+  co_return;
+}
+
+// rtNEAT: Link trait mutation - change gene's trait assignment
+ethreads::coro_task<void> pool::mutate_link_trait(genome &g) {
+  if (g.genes.empty() || g.traits.empty()) co_return;
+
+  std::uniform_int_distribution<size_t> gene_dist(0, g.genes.size() - 1);
+  std::uniform_int_distribution<size_t> trait_dist(0, g.traits.size());  // 0 = no trait
+
+  size_t gene_idx = eneat::get_rand(gene_dist);
+  auto it = g.genes.begin();
+  std::advance(it, gene_idx);
+
+  it->second.trait_id = eneat::get_rand(trait_dist);
+
+  co_return;
 }
 
 std::istream &operator>>(std::istream &input, pool &p) {

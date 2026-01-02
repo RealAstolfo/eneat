@@ -88,12 +88,12 @@ std::vector<int> NetworkVisualizer::compute_depths(const brain& net) {
     std::vector<int> depth(net.neurons.size(), -1);
     std::vector<bool> finalized(net.neurons.size(), false);
 
-    // Build forward adjacency list (out_neurons) from in_neurons
+    // Build forward adjacency list (out_neurons) from in_connections
     std::vector<std::vector<size_t>> out_neurons(net.neurons.size());
     for (size_t i = 0; i < net.neurons.size(); i++) {
-        for (const auto& [from, weight] : net.neurons[i].in_neurons) {
-            if (from < net.neurons.size()) {
-                out_neurons[from].push_back(i);
+        for (const auto& conn : net.neurons[i].in_connections) {
+            if (conn.from_neuron < net.neurons.size()) {
+                out_neurons[conn.from_neuron].push_back(i);
             }
         }
     }
@@ -385,8 +385,16 @@ void NetworkVisualizer::render(const brain& net) {
 
     // Count connections for info display
     size_t connection_count = 0;
+    size_t hebbian_count = 0;
     for (const auto& n : net.neurons) {
-        connection_count += n.in_neurons.size();
+        connection_count += n.in_connections.size();
+        for (const auto& conn : n.in_connections) {
+            if (conn.trait_id > 0 && conn.trait_id <= net.traits.size()) {
+                if (net.traits[conn.trait_id - 1].is_learning_enabled()) {
+                    hebbian_count++;
+                }
+            }
+        }
     }
 
     // Draw connections first (so they're behind neurons)
@@ -394,13 +402,26 @@ void NetworkVisualizer::render(const brain& net) {
         const auto& neuron = net.neurons[to_idx];
         const auto& to_pos = positions[to_idx];
 
-        for (const auto& [from_idx, weight] : neuron.in_neurons) {
-            if (from_idx < positions.size()) {
-                const auto& from_pos = positions[from_idx];
+        for (const auto& conn : neuron.in_connections) {
+            if (conn.from_neuron < positions.size()) {
+                const auto& from_pos = positions[conn.from_neuron];
 
-                Color line_color = weight_to_color(weight);
+                Color line_color = weight_to_color(conn.weight);
+
+                // Highlight Hebbian connections with a different style
+                bool is_hebbian = false;
+                if (conn.trait_id > 0 && conn.trait_id <= net.traits.size()) {
+                    is_hebbian = net.traits[conn.trait_id - 1].is_learning_enabled();
+                }
+
+                if (is_hebbian) {
+                    // Hebbian connections get a purple tint
+                    line_color.r = (line_color.r + 128) / 2;
+                    line_color.b = (line_color.b + 255) / 2;
+                }
+
                 // Minimum 1.0 thickness for better visibility with MSAA
-                float thickness = std::clamp(std::abs(weight) * 2.0f * scale, 1.0f, 4.0f);
+                float thickness = std::clamp(std::abs(conn.weight) * 2.0f * scale, 1.0f, 4.0f);
 
                 DrawLineEx(
                     Vector2{from_pos.x, from_pos.y},
@@ -408,6 +429,13 @@ void NetworkVisualizer::render(const brain& net) {
                     thickness,
                     line_color
                 );
+
+                // Draw recurrent indicator (small arrow) if recurrent
+                if (conn.is_recurrent) {
+                    float mid_x = (from_pos.x + to_pos.x) / 2.0f;
+                    float mid_y = (from_pos.y + to_pos.y) / 2.0f;
+                    DrawCircle(static_cast<int>(mid_x), static_cast<int>(mid_y), 3.0f, PURPLE);
+                }
             }
         }
     }
@@ -429,17 +457,28 @@ void NetworkVisualizer::render(const brain& net) {
 
     // Draw info text (use actual screen height)
     int screen_h = GetScreenHeight();
-    DrawText(
-        TextFormat("Neurons: %d  |  Connections: %d  |  Scale: %.0f%%",
-                   (int)net.neurons.size(), (int)connection_count, scale * 100),
-        10, screen_h - 25, 16, LIGHTGRAY
-    );
+    if (hebbian_count > 0) {
+        DrawText(
+            TextFormat("Neurons: %d  |  Connections: %d  |  Hebbian: %d  |  Scale: %.0f%%",
+                       (int)net.neurons.size(), (int)connection_count, (int)hebbian_count, scale * 100),
+            10, screen_h - 25, 16, LIGHTGRAY
+        );
+    } else {
+        DrawText(
+            TextFormat("Neurons: %d  |  Connections: %d  |  Scale: %.0f%%",
+                       (int)net.neurons.size(), (int)connection_count, scale * 100),
+            10, screen_h - 25, 16, LIGHTGRAY
+        );
+    }
 
     // Draw legend
     DrawText("Input", 10, 10, 12, GREEN);
     DrawText("Output", 60, 10, 12, ORANGE);
     DrawText("Hidden", 120, 10, 12, GRAY);
     DrawText("Bias", 180, 10, 12, YELLOW);
+    if (net.hebbian_enabled) {
+        DrawText("Hebbian", 230, 10, 12, PURPLE);
+    }
 
     // Call label callback if set (allows custom labels to be drawn)
     if (label_callback_) {

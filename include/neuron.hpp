@@ -20,15 +20,30 @@ enum neuron_place {
   BIAS = 3,
 };
 
+// Connection structure for Hebbian learning support
+struct neuron_connection {
+  size_t from_neuron;         // Source neuron index
+  exfloat weight;             // Connection weight
+  size_t trait_id = 0;        // Trait for Hebbian learning (0 = no trait)
+  bool is_recurrent = false;  // Recurrent connection flag
+
+  neuron_connection() : from_neuron(0), weight(0.0f), trait_id(0), is_recurrent(false) {}
+  neuron_connection(size_t from, exfloat w, size_t tid = 0, bool rec = false)
+      : from_neuron(from), weight(w), trait_id(tid), is_recurrent(rec) {}
+};
+
 struct neuron {
   neuron_place type = HIDDEN;
   exfloat value = 0.0f;
+  exfloat last_activation = 0.0f;  // For Hebbian learning: previous activation
+  exfloat activation_count = 0.0f; // For averaging activations
   bool visited = false;
-  std::vector<std::pair<size_t, exfloat>> in_neurons;
+  std::vector<neuron_connection> in_connections;
   ai_func_type activation_function = RELU;
+  size_t trait_id = 0;  // Node trait for node-level learning parameters
 
   neuron() {}
-  ~neuron() { in_neurons.clear(); }
+  ~neuron() { in_connections.clear(); }
 };
 
 #endif

@@ -32,6 +32,13 @@ inline auto get_rand(Dist &d) -> decltype(d(tl_generator)) {
 }
 } // namespace eneat
 
+// Crossover type enum for multiple crossover strategies
+enum class crossover_type {
+  MULTIPOINT,       // Random selection from matching genes (default)
+  MULTIPOINT_AVG,   // Average weights of matching genes
+  SINGLEPOINT       // Traditional single-point crossover
+};
+
 struct pool {
   // Channel-based innovation tracking (replaces mutex-protected container)
   eneat::innovation_channel innovation_chan;
@@ -46,12 +53,27 @@ struct pool {
   network_info_container network_info;
   std::list<specie> species;
 
+  // rtNEAT: Counter for unique species IDs
+  size_t next_species_id = 1;
+
   pool(size_t input, size_t output, size_t bias = 1, bool rec = false);
 
+  // Compatibility distance calculation (rtNEAT-style with disjoint/excess separation)
   bool is_same_species(const genome &g1, const genome &g2);
+  exfloat disjoint(const genome &g1, const genome &g2);  // Genes within range
+  exfloat excess(const genome &g1, const genome &g2);    // Genes beyond range
+  exfloat mut_diff(const genome &g1, const genome &g2);  // Mutation number difference
+
+  // Generation management
   void new_generation();
   std::vector<std::pair<specie *, genome *>> get_genomes();
-  genome crossover(const genome &g1, const genome &g2);
+
+  // Multiple crossover types (rtNEAT-style)
+  genome crossover(const genome &g1, const genome &g2);  // Default multipoint
+  genome crossover_multipoint(const genome &g1, const genome &g2);
+  genome crossover_multipoint_avg(const genome &g1, const genome &g2);
+  genome crossover_singlepoint(const genome &g1, const genome &g2);
+
   // Coroutine mutation functions
   ethreads::coro_task<void> mutate_activation(genome &g);
   ethreads::coro_task<void> mutate_weight(genome &g);
@@ -61,10 +83,14 @@ struct pool {
   ethreads::coro_task<void> mutate_bias_neuron(genome &g);  // Add new bias neuron
   ethreads::coro_task<void> mutate(genome &g);
 
+  // Trait mutations (for Hebbian learning)
+  ethreads::coro_task<void> mutate_random_trait(genome &g);
+  ethreads::coro_task<void> mutate_link_trait(genome &g);
+
   // Synchronous mutation for single-threaded initialization
   void mutate_sync(genome &g);
-  exfloat disjoint(const genome &g1, const genome &g2);
-  exfloat weights(const genome &g1, const genome &g2);
+
+  // Fitness and selection
   void rank_globally();
   void calculate_average_fitness(specie &s);
   size_t total_average_fitness();
@@ -73,6 +99,18 @@ struct pool {
   void remove_stale_species();
   void remove_weak_species();
   void add_to_species(const genome &child);
+
+  // rtNEAT fitness adjustment (with age penalties/bonuses)
+  void adjust_species_fitness(specie &s);
+
+  // rtNEAT: Real-time evolution methods
+  specie* choose_parent_species();                        // Roulette wheel species selection
+  ethreads::coro_task<genome> reproduce_one_async();      // Produce single offspring
+  ethreads::coro_task<void> remove_worst_async();         // Remove lowest fitness organism
+  void estimate_all_averages();                           // Update running averages
+
+  // Age all organisms (increment time_alive)
+  void age_all_organisms();
 
   // Initialize species channel (call before async operations)
   void init_species_channel();
@@ -85,13 +123,6 @@ struct pool {
   ethreads::coro_task<void> calculate_all_average_fitness_async();
   // Async new_generation using when_all for parallel operations
   ethreads::coro_task<void> new_generation_async();
-
-  // Deprecated: use eneat::get_rand() instead
-  // Kept for compatibility during transition
-  template <typename Dist>
-  inline auto get_rand(Dist &d, std::mt19937 &) -> decltype(d(eneat::tl_generator)) {
-    return eneat::get_rand(d);
-  }
 };
 
 std::istream &operator>>(std::istream &input, pool &p);
