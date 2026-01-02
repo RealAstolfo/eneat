@@ -23,12 +23,13 @@
 #include "specie.hpp"
 #include <task_scheduler.hpp>
 
-pool::pool(size_t input, size_t output, size_t bias, bool rec) {
+pool::pool(size_t input, size_t output, size_t population, size_t bias, bool rec) {
   network_info.input_size = input;
   network_info.output_size = output;
   network_info.bias_size = bias;
   network_info.functional_neurons = input + output + bias;
   network_info.recurrent = rec;
+  speciating_parameters.population = population;  // Set before creating genomes
   // Thread-local RNG is initialized per-thread, no seeding needed here
   for (size_t i = 0; i < speciating_parameters.population; i++) {
     genome new_genome(network_info, mutation_rates);
@@ -46,6 +47,66 @@ std::vector<std::pair<specie *, genome *>> pool::get_genomes() {
     });
   }
   return result;
+}
+
+// Safe index-based genome access functions
+
+std::vector<std::pair<size_t, size_t>> pool::get_genome_indices() {
+  std::vector<std::pair<size_t, size_t>> result;
+  size_t species_idx = 0;
+  for (auto& s : species) {
+    size_t genome_count = s.genomes.load().size();
+    for (size_t i = 0; i < genome_count; i++) {
+      result.push_back({species_idx, i});
+    }
+    species_idx++;
+  }
+  return result;
+}
+
+size_t pool::get_population_size() {
+  size_t count = 0;
+  for (const auto& s : species) {
+    count += s.genomes.load().size();
+  }
+  return count;
+}
+
+genome pool::get_genome_copy(size_t species_idx, size_t genome_idx) {
+  auto it = species.begin();
+  std::advance(it, species_idx);
+  if (it == species.end()) {
+    return genome(network_info, mutation_rates);  // Return empty genome if invalid
+  }
+  genome result(network_info, mutation_rates);
+  it->genomes.modify([&](std::vector<genome>& g) {
+    if (genome_idx < g.size()) {
+      result = g[genome_idx];
+    }
+  });
+  return result;
+}
+
+void pool::set_genome_fitness(size_t species_idx, size_t genome_idx, size_t fitness) {
+  auto it = species.begin();
+  std::advance(it, species_idx);
+  if (it == species.end()) return;
+  it->genomes.modify([&](std::vector<genome>& g) {
+    if (genome_idx < g.size()) {
+      g[genome_idx].fitness.store(fitness);
+    }
+  });
+}
+
+void pool::increment_genome_age(size_t species_idx, size_t genome_idx) {
+  auto it = species.begin();
+  std::advance(it, species_idx);
+  if (it == species.end()) return;
+  it->genomes.modify([&](std::vector<genome>& g) {
+    if (genome_idx < g.size()) {
+      g[genome_idx].time_alive.store(g[genome_idx].time_alive.load() + 1);
+    }
+  });
 }
 
 // Default crossover - delegates to multipoint
@@ -357,8 +418,8 @@ ethreads::coro_task<void> pool::mutate_link(genome &g, const bool &force_bias) {
     if (it->second.from_node == neuron1 && it->second.to_node == neuron2)
       co_return;
 
-  // Use channel-based innovation tracking (async)
-  new_gene.innovation_num = co_await innovation_chan.request_innovation_async(
+  // Direct innovation tracking (no channel service needed for rtNEAT)
+  new_gene.innovation_num = innovation_chan.add_gene_direct(
       new_gene.from_node, new_gene.to_node);
   std::uniform_real_distribution<exfloat> weight_generator(0.0f, 1.0f);
   std::uniform_int_distribution<size_t> act_generator(ai_func_type::FIRST,
@@ -389,8 +450,8 @@ ethreads::coro_task<void> pool::mutate_neuron(genome &g) {
   std::uniform_int_distribution<size_t> act_dist(ai_func_type::FIRST,
                                                  ai_func_type::LAST);
   new_gene1.activation = (ai_func_type)eneat::get_rand(act_dist);
-  // Use channel-based innovation tracking (async)
-  new_gene1.innovation_num = co_await innovation_chan.request_innovation_async(
+  // Direct innovation tracking (no channel service needed for rtNEAT)
+  new_gene1.innovation_num = innovation_chan.add_gene_direct(
       new_gene1.from_node, new_gene1.to_node);
   new_gene1.enabled = true;
   gene new_gene2;
@@ -398,8 +459,8 @@ ethreads::coro_task<void> pool::mutate_neuron(genome &g) {
   new_gene2.to_node = it->second.to_node;
   new_gene2.weight = it->second.weight;
   new_gene2.activation = it->second.activation;
-  // Use channel-based innovation tracking (async)
-  new_gene2.innovation_num = co_await innovation_chan.request_innovation_async(
+  // Direct innovation tracking (no channel service needed for rtNEAT)
+  new_gene2.innovation_num = innovation_chan.add_gene_direct(
       new_gene2.from_node, new_gene2.to_node);
   new_gene2.enabled = true;
   g.genes[new_gene1.innovation_num] = new_gene1;
@@ -433,7 +494,8 @@ ethreads::coro_task<void> pool::mutate_bias_neuron(genome &g) {
   new_gene.from_node = new_neuron_id;
   new_gene.to_node = target;
   new_gene.is_bias_source = true;  // Mark this gene as originating from a bias neuron
-  new_gene.innovation_num = co_await innovation_chan.request_innovation_async(
+  // Direct innovation tracking (no channel service needed for rtNEAT)
+  new_gene.innovation_num = innovation_chan.add_gene_direct(
       new_gene.from_node, new_gene.to_node);
   std::uniform_real_distribution<exfloat> weight_generator(0.0f, 1.0f);
   std::uniform_int_distribution<size_t> act_generator(ai_func_type::FIRST,
@@ -794,30 +856,12 @@ bool pool::is_same_species(const genome &g1, const genome &g2) {
   return dd + de + dw < speciating_parameters.delta_threshold;
 }
 
-void pool::rank_globally() {
-  std::vector<genome *> global;
-  for (auto s = species.begin(); s != species.end(); s++) {
-    s->genomes.modify([&](std::vector<genome> &g) {
-      for (size_t i = 0; i < g.size(); i++)
-        global.push_back(&g[i]);
-    });
-  }
-  std::sort(global.begin(), global.end(), [](genome *&a, genome *&b) -> bool {
-    if (a->fitness.load() == b->fitness.load())
-      return a->genes.size() < b->genes.size();
-    else
-      return a->fitness.load() < b->fitness.load();
-  });
-  for (size_t j = 0; j < global.size(); j++)
-    global[j]->global_rank.store(j + 1);
-}
-
 void pool::calculate_average_fitness(specie &s) {
   s.genomes.modify([&](std::vector<genome> &g) {
     size_t total = 0;
     size_t genome_count = g.size();
     for (size_t i = 0; i < genome_count; i++)
-      total += g[i].global_rank.load();
+      total += g[i].fitness.load();
     if (genome_count > 0)
       s.average_fitness.store(total / genome_count);
   });
@@ -828,21 +872,6 @@ size_t pool::total_average_fitness() {
   for (auto s = species.begin(); s != species.end(); s++)
     total += (*s).average_fitness.load();
   return total;
-}
-
-void pool::cull_species(const bool &cut_to_one) {
-  for (auto s = species.begin(); s != species.end(); s++) {
-    s->genomes.modify([&](std::vector<genome> &g) {
-      std::sort(g.begin(), g.end(),
-                [](genome &a, genome &b) { return a.fitness.load() > b.fitness.load(); });
-      size_t remaining = std::ceil(g.size() * 1.0f / 2.0f);
-      if (cut_to_one)
-        remaining = 1;
-      while (g.size() > remaining)
-        g.pop_back();
-      g.shrink_to_fit();  // Reclaim memory from culled genomes
-    });
-  }
 }
 
 ethreads::coro_task<genome> pool::breed_child(specie &s) {
@@ -872,8 +901,8 @@ ethreads::coro_task<genome> pool::breed_child(specie &s) {
     co_return child;
   }
 
-  // Mutate the child asynchronously (outside the lock)
-  co_await mutate(child);
+  // Mutate the child synchronously (avoids thread pool starvation from nested co_await)
+  mutate_sync(child);
   co_return child;
 }
 
@@ -955,275 +984,10 @@ void pool::init_species_channel() {
 }
 
 ethreads::coro_task<void> pool::add_to_species_async(genome child) {
-  if (species_chan) {
-    species_chan->request_add_sync(std::move(child));
-  } else {
-    // Fallback to sync if channel not initialized
-    add_to_species(child);
-  }
+  // rtNEAT adds one child at a time - use direct synchronous add
+  // (channel is unnecessary overhead for single additions)
+  add_to_species(child);
   co_return;
-}
-
-// Async version of cull_species - sorts genomes in each species in parallel
-ethreads::coro_task<void> pool::cull_species_async(const bool &cut_to_one) {
-  // Create tasks to cull each species in parallel
-  std::vector<ethreads::coro_task<void>> cull_tasks;
-
-  for (auto &s : species) {
-    cull_tasks.push_back(
-        [](specie &sp, bool cut) -> ethreads::coro_task<void> {
-          // Access genomes via sync_shared_value
-          sp.genomes.modify([&](std::vector<genome> &g) {
-            std::sort(g.begin(), g.end(),
-                      [](genome &a, genome &b) { return a.fitness.load() > b.fitness.load(); });
-            size_t remaining = std::ceil(g.size() * 1.0f / 2.0f);
-            if (cut)
-              remaining = 1;
-            while (g.size() > remaining)
-              g.pop_back();
-            g.shrink_to_fit();  // Reclaim memory from culled genomes
-          });
-          co_return;
-        }(s, cut_to_one));
-  }
-
-  co_await ethreads::when_all(std::move(cull_tasks));
-}
-
-// Async version of rank_globally - with yield points for cooperative scheduling
-ethreads::coro_task<void> pool::rank_globally_async() {
-  std::vector<genome *> global;
-
-  // Collect pointers to all genomes via sync_shared_value
-  for (auto &s : species) {
-    s.genomes.modify([&](std::vector<genome> &g) {
-      for (size_t i = 0; i < g.size(); i++)
-        global.push_back(&g[i]);
-    });
-  }
-
-  // Sort all genomes by fitness
-  std::sort(global.begin(), global.end(), [](genome *&a, genome *&b) -> bool {
-    if (a->fitness.load() == b->fitness.load())
-      return a->genes.size() < b->genes.size();
-    else
-      return a->fitness.load() < b->fitness.load();
-  });
-
-  // Yield to let other coroutines run after heavy sort operation
-  co_await ethreads::yield();
-
-  // Assign ranks (genome pointers are still valid since genomes vector hasn't changed)
-  for (size_t j = 0; j < global.size(); j++)
-    global[j]->global_rank.store(j + 1);
-
-  co_return;
-}
-
-// Async version that calculates average fitness for all species in parallel
-ethreads::coro_task<void> pool::calculate_all_average_fitness_async() {
-  std::vector<ethreads::coro_task<void>> fitness_tasks;
-
-  for (auto &s : species) {
-    fitness_tasks.push_back(
-        [](specie &sp) -> ethreads::coro_task<void> {
-          // Access genomes via sync_shared_value
-          sp.genomes.modify([&](std::vector<genome> &g) {
-            size_t total = 0;
-            size_t genome_count = g.size();
-            for (size_t i = 0; i < genome_count; i++)
-              total += g[i].global_rank.load();
-            if (genome_count > 0)
-              sp.average_fitness.store(total / genome_count);
-          });
-          co_return;
-        }(s));
-  }
-
-  co_await ethreads::when_all(std::move(fitness_tasks));
-}
-
-// Fully async version of new_generation using when_all for parallel operations
-ethreads::coro_task<void> pool::new_generation_async() {
-  // Reset innovation tracking for this generation
-  innovation_chan.reset();
-
-  // Initialize species channel for concurrent child addition
-  init_species_channel();
-
-  // Phase 1: Parallel species prep
-  co_await cull_species_async(false);
-  co_await rank_globally_async();
-
-  // Sequential: modifies species list
-  remove_stale_species();
-
-  // Phase 2: Parallel fitness calculation
-  co_await calculate_all_average_fitness_async();
-
-  // Sequential: modifies species list
-  remove_weak_species();
-
-  // Calculate breeding counts BEFORE culling (uses average_fitness)
-  size_t sum = total_average_fitness();
-  std::vector<std::pair<specie*, size_t>> breed_counts;
-  for (auto &s : species) {
-    size_t breed = std::floor(((1. * s.average_fitness.load()) / (1. * sum)) * 1. *
-                              speciating_parameters.population) -
-                   1;
-    breed_counts.push_back({&s, breed});
-  }
-
-  // Cull to one genome per species BEFORE breeding (so breed_child sees consistent state)
-  co_await cull_species_async(true);
-
-  // Now create breed_child tasks (species have 1 genome each now)
-  std::vector<ethreads::coro_task<genome>> children;
-  // Pre-reserve to avoid reallocation during push_back
-  size_t total_breed = 0;
-  for (const auto& [sp, count] : breed_counts) {
-    total_breed += count;
-  }
-  children.reserve(total_breed + speciating_parameters.population);
-
-  for (const auto& [sp, breed] : breed_counts) {
-    for (size_t i = 0; i < breed; i++)
-      children.push_back(breed_child(*sp));
-  }
-
-  std::uniform_int_distribution<size_t> choose_specie(0, species.size() - 1);
-  std::vector<specie *> species_pointer;
-  species_pointer.reserve(species.size());
-  for (auto &s : species)
-    species_pointer.push_back(&s);
-
-  if (species.size() > 0) {
-    while (children.size() + species.size() < speciating_parameters.population)
-      children.push_back(
-          breed_child(*species_pointer[eneat::get_rand(choose_specie)]));
-  }
-
-  // Create service tasks (don't spawn detached - we need to await them)
-  auto innovation_service = innovation_chan.run_service();
-  innovation_service.start();
-
-  // Start all child breeding tasks in parallel
-  for (auto &child_task : children) {
-    child_task.start();
-  }
-
-  // Create species service task
-  auto species_service = species_chan->run_service();
-  species_service.start();
-
-  // Use when_all to collect all children in parallel
-  auto child_genomes = co_await ethreads::when_all(std::move(children));
-
-  // Add children to species via channel (async with when_all)
-  std::vector<ethreads::coro_task<void>> add_tasks;
-  add_tasks.reserve(child_genomes.size());
-  for (auto &child : child_genomes) {
-    add_tasks.push_back(species_chan->request_add_async(std::move(child)));
-  }
-  co_await ethreads::when_all(std::move(add_tasks));
-
-  // Stop services and wait for them to complete
-  innovation_chan.stop();
-  species_chan->stop();
-  co_await innovation_service;  // Wait for innovation service to fully exit
-  co_await species_service;     // Wait for species service to fully exit
-
-  // Cleanup channel
-  species_chan.reset();
-
-  generation_number.modify([](size_t &v) { ++v; });
-
-  co_return;
-}
-
-void pool::new_generation() {
-  // Reset innovation tracking for this generation
-  innovation_chan.reset();
-
-  // Initialize species channel for concurrent child addition
-  init_species_channel();
-
-  cull_species(false);
-  rank_globally();
-  remove_stale_species();
-  for (auto s = species.begin(); s != species.end(); s++)
-    calculate_average_fitness(*s);
-  remove_weak_species();
-
-  // Calculate breeding counts BEFORE culling (uses average_fitness)
-  size_t sum = total_average_fitness();
-  std::vector<std::pair<specie*, size_t>> breed_counts;
-  for (auto &s : species) {
-    size_t breed = std::floor(((1. * s.average_fitness.load()) / (1. * sum)) * 1. *
-                              speciating_parameters.population) -
-                   1;
-    breed_counts.push_back({&s, breed});
-  }
-
-  // Cull to one genome per species BEFORE breeding (so breed_child sees consistent state)
-  cull_species(true);
-
-  // Now create breed_child tasks (species have 1 genome each now)
-  std::vector<ethreads::coro_task<genome>> children;
-  // Pre-reserve to avoid reallocation during push_back
-  size_t total_breed = 0;
-  for (const auto& [sp, count] : breed_counts) {
-    total_breed += count;
-  }
-  children.reserve(total_breed + speciating_parameters.population);
-
-  for (const auto& [sp, breed] : breed_counts) {
-    for (size_t i = 0; i < breed; i++)
-      children.push_back(breed_child(*sp));
-  }
-
-  std::uniform_int_distribution<size_t> choose_specie(0, species.size() - 1);
-  std::vector<specie *> species_pointer;
-  species_pointer.reserve(species.size());
-  for (auto &s : species)
-    species_pointer.push_back(&s);
-
-  if (species.size() == 0) {
-    // everyone is dead
-  } else
-    while (children.size() + species.size() < speciating_parameters.population)
-      children.push_back(
-          breed_child(*species_pointer[eneat::get_rand(choose_specie)]));
-
-  // Create service tasks (don't spawn detached - we need to wait for them)
-  auto innovation_service = innovation_chan.run_service();
-  innovation_service.start();
-
-  // Start all child breeding tasks
-  for (auto &child_task : children) {
-    child_task.start();
-  }
-
-  // Create species service task
-  auto species_service = species_chan->run_service();
-  species_service.start();
-
-  // Collect children and add to species via channel
-  // The channel service processes requests concurrently
-  for (auto &child_task : children) {
-    species_chan->request_add_sync(child_task.get());
-  }
-
-  // Stop services and wait for them to complete
-  innovation_chan.stop();
-  species_chan->stop();
-  innovation_service.get();  // Wait for innovation service to fully exit
-  species_service.get();     // Wait for species service to fully exit
-
-  // Cleanup channel
-  species_chan.reset();
-
-  generation_number.modify([](size_t &v) { ++v; });
 }
 
 // ============================================================================
@@ -1331,12 +1095,15 @@ void pool::age_all_organisms() {
 }
 
 // rtNEAT: Remove worst organism (lowest adjusted fitness among mature organisms)
-ethreads::coro_task<void> pool::remove_worst_async() {
-  specie* worst_species = nullptr;
-  size_t worst_idx = 0;
+// Returns true if an organism was removed, false if no mature organisms found
+ethreads::coro_task<bool> pool::remove_worst_async() {
+  // Use index-based tracking to avoid pointer invalidation
+  size_t worst_species_idx = std::numeric_limits<size_t>::max();
+  size_t worst_genome_idx = 0;
   size_t min_fitness = std::numeric_limits<size_t>::max();
 
   // Find worst organism among mature ones
+  size_t species_idx = 0;
   for (auto &s : species) {
     auto genomes_copy = s.genomes.load();
     for (size_t i = 0; i < genomes_copy.size(); i++) {
@@ -1345,28 +1112,37 @@ ethreads::coro_task<void> pool::remove_worst_async() {
         size_t adj = g.adjusted_fitness.load();
         if (adj < min_fitness) {
           min_fitness = adj;
-          worst_species = &s;
-          worst_idx = i;
+          worst_species_idx = species_idx;
+          worst_genome_idx = i;
         }
       }
     }
+    species_idx++;
   }
 
-  // Remove worst organism
-  if (worst_species) {
-    worst_species->genomes.modify([worst_idx](std::vector<genome> &gs) {
-      if (worst_idx < gs.size()) {
-        gs.erase(gs.begin() + static_cast<std::ptrdiff_t>(worst_idx));
-      }
-    });
+  // Remove worst organism using index-based access
+  if (worst_species_idx != std::numeric_limits<size_t>::max()) {
+    // Re-fetch the species iterator to ensure it's valid
+    auto it = species.begin();
+    std::advance(it, worst_species_idx);
 
-    // Remove empty species
-    species.remove_if([](const specie &s) {
-      return s.genomes.load().empty();
-    });
+    if (it != species.end()) {
+      it->genomes.modify([worst_genome_idx](std::vector<genome> &gs) {
+        if (worst_genome_idx < gs.size()) {
+          gs.erase(gs.begin() + static_cast<std::ptrdiff_t>(worst_genome_idx));
+        }
+      });
+
+      // Remove empty species
+      species.remove_if([](const specie &s) {
+        return s.genomes.load().empty();
+      });
+
+      co_return true;  // Successfully removed an organism
+    }
   }
 
-  co_return;
+  co_return false;  // No mature organisms found to remove
 }
 
 // rtNEAT: Produce single offspring (continuous evolution)
@@ -1379,16 +1155,102 @@ ethreads::coro_task<genome> pool::reproduce_one_async() {
     co_return genome(network_info, mutation_rates);
   }
 
-  // Breed a child from the chosen species
+  // Breed a child from the chosen species (includes mutation via mutate_sync)
   genome child = co_await breed_child(*parent_species);
-
-  // Apply mutations
-  co_await mutate(child);
 
   // Reset time_alive for new organism
   child.time_alive.store(0);
 
   co_return child;
+}
+
+// ============================================================================
+// Synchronous versions of rtNEAT functions (avoid coroutine scheduling overhead)
+// ============================================================================
+
+genome pool::breed_child_sync(specie &s) {
+  genome child(network_info, mutation_rates);
+  std::uniform_real_distribution<exfloat> distributor(0.0f, 1.0f);
+
+  // Access genomes via sync_shared_value to select parents
+  bool should_return_early = false;
+  s.genomes.modify([&](std::vector<genome> &g) {
+    if (g.empty()) {
+      should_return_early = true;
+      return;
+    }
+    std::uniform_int_distribution<size_t> choose_genome(0, g.size() - 1);
+    if (eneat::get_rand(distributor) < mutation_rates.crossover_chance) {
+      genome g1 = g[eneat::get_rand(choose_genome)];
+      genome g2 = g[eneat::get_rand(choose_genome)];
+      child = crossover(g1, g2);
+    } else {
+      child = g[eneat::get_rand(choose_genome)];
+    }
+  });
+
+  if (should_return_early) {
+    return child;
+  }
+
+  mutate_sync(child);
+  return child;
+}
+
+genome pool::reproduce_one() {
+  specie* parent_species = choose_parent_species();
+
+  if (!parent_species) {
+    return genome(network_info, mutation_rates);
+  }
+
+  genome child = breed_child_sync(*parent_species);
+  child.time_alive.store(0);
+  return child;
+}
+
+bool pool::remove_worst() {
+  size_t worst_species_idx = std::numeric_limits<size_t>::max();
+  size_t worst_genome_idx = 0;
+  size_t min_fitness = std::numeric_limits<size_t>::max();
+
+  size_t species_idx = 0;
+  for (auto &s : species) {
+    auto genomes_copy = s.genomes.load();
+    for (size_t i = 0; i < genomes_copy.size(); i++) {
+      const auto &g = genomes_copy[i];
+      if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
+        size_t adj = g.adjusted_fitness.load();
+        if (adj < min_fitness) {
+          min_fitness = adj;
+          worst_species_idx = species_idx;
+          worst_genome_idx = i;
+        }
+      }
+    }
+    species_idx++;
+  }
+
+  if (worst_species_idx != std::numeric_limits<size_t>::max()) {
+    auto it = species.begin();
+    std::advance(it, worst_species_idx);
+
+    if (it != species.end()) {
+      it->genomes.modify([worst_genome_idx](std::vector<genome> &gs) {
+        if (worst_genome_idx < gs.size()) {
+          gs.erase(gs.begin() + static_cast<std::ptrdiff_t>(worst_genome_idx));
+        }
+      });
+
+      species.remove_if([](const specie &s) {
+        return s.genomes.load().empty();
+      });
+
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // rtNEAT: Trait mutation - perturb random trait's parameters
@@ -1426,10 +1288,9 @@ std::istream &operator>>(std::istream &input, pool &p) {
   size_t innovation_num;
   input >> innovation_num;
   p.innovation_chan.set_innovation_number(innovation_num);
-  size_t gen_num, max_fit;
-  input >> gen_num;
+  size_t reserved, max_fit;
+  input >> reserved;  // Reserved for backwards compatibility (was generation_number)
   input >> max_fit;
-  p.generation_number.store(gen_num);
   p.max_fitness.store(max_fit);
   input >> p.network_info.input_size >> p.network_info.output_size >>
       p.network_info.bias_size;
@@ -1491,7 +1352,7 @@ std::istream &operator>>(std::istream &input, pool &p) {
 
 std::ostream &operator<<(std::ostream &output, pool &p) {
   output << p.innovation_chan.number() << std::endl;
-  output << p.generation_number.load() << std::endl;
+  output << 0 << std::endl;  // Reserved for backwards compatibility (was generation_number)
   output << p.max_fitness.load() << std::endl;
   output << p.network_info.input_size << " " << p.network_info.output_size
          << " " << p.network_info.bias_size << std::endl;

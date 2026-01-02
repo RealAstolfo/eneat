@@ -19,10 +19,15 @@
 
 model::model(
     const fitness_func_t &get_fitness,
-    std::string &model_name)
+    std::string &model_name,
+    size_t input,
+    size_t output,
+    size_t population,
+    size_t bias,
+    bool recurrent)
     : get_fitness(get_fitness) {
   this->model_name = std::move(model_name);
-  this->p = std::make_unique<pool>(1, 1, 1, true);
+  this->p = std::make_unique<pool>(input, output, population, bias, recurrent);
   load_pool(this->model_name + "_pool");
   load_best(this->model_name + "_best");
 
@@ -36,137 +41,113 @@ model::~model() {
   save_pool();   // No-op if read_only_
 }
 
-// Coroutine-based training job for a batch of genomes
-ethreads::coro_task<std::pair<size_t, genome *>>
-training_job_coro(std::vector<genome *>::iterator start,
-                  std::vector<genome *>::iterator stop,
-                  fitness_func_t fit_func) {
-  genome *best_genome = *start;
-  size_t best_fitness = 0;
+// === rtNEAT: Real-time continuous evolution ===
 
-  for (; start != stop; std::advance(start, 1)) {
-    brain net;
-    genome *const genome = *start;
-    net = *genome;
-    size_t fitness = co_await fit_func(net);
-    genome->fitness.store(fitness);
-    if (fitness > best_fitness) {
-      best_fitness = fitness;
-      best_genome = genome;
-    }
+size_t model::population_size() const {
+  size_t count = 0;
+  for (const auto& s : p->species) {
+    count += s.genomes.load().size();
   }
-
-  co_return std::pair<size_t, genome *>(best_fitness, best_genome);
+  return count;
 }
 
-void model::train(std::size_t times) {
-  // Use stored best fitness for comparison
-  size_t best_fitness = this->get_best_fitness();
-  while (times-- > 0) {
-    std::vector<genome *> genomes;
-    for (auto &specie : this->p->species)
-      specie.genomes.modify([&](std::vector<genome> &g) {
-        for (auto &genome : g)
-          genomes.push_back(&genome);
-      });
+// Evaluate a genome copy and return fitness (safe across co_await points)
+ethreads::coro_task<size_t> model::evaluate_genome_copy_async(genome g) {
+  brain net;
+  net = g;
+  size_t fitness = co_await get_fitness(net);
 
-    std::sort(std::begin(genomes), std::end(genomes),
-              [](const genome *a, const genome *b) { return a < b; });
-
-    auto last = std::unique(std::begin(genomes), std::end(genomes));
-    genomes.erase(last, std::end(genomes));
-
-    // Create coroutine tasks for parallel genome evaluation
-    std::vector<ethreads::coro_task<std::pair<size_t, genome *>>> tasks;
-    const std::size_t num_threads = std::thread::hardware_concurrency();
-    const std::size_t total_items = genomes.size();
-
-    if (total_items == 0) {
-      this->p->new_generation();
-      continue;
-    }
-
-    const std::size_t batch_size = (total_items + num_threads - 1) / num_threads;
-    auto batch_start = std::begin(genomes);
-
-    while (batch_start != std::end(genomes)) {
-      auto batch_stop = batch_start;
-      std::size_t remaining = std::distance(batch_start, std::end(genomes));
-      std::advance(batch_stop, std::min(batch_size, remaining));
-      tasks.push_back(training_job_coro(batch_start, batch_stop, this->get_fitness));
-      batch_start = batch_stop;
-    }
-
-    // Start all tasks for parallel execution
-    for (auto &task : tasks) {
-      task.start();
-    }
-
-    // Collect results (tasks run in parallel, collection is sequential)
-    for (auto &task : tasks) {
-      auto [fitness, genome] = task.get();
-      if (fitness > best_fitness) {
-        best_fitness = fitness;
-        brain net;
-        net = *genome;
-        this->set_best_brain(net, fitness);
-      }
-    }
-
-    this->p->new_generation();
+  // Update best if this is better (thread-safe via sync_shared_value)
+  if (fitness > get_best_fitness()) {
+    set_best_brain(net, fitness);
   }
+
+  co_return fitness;
 }
 
-ethreads::coro_task<void> model::train_async(std::size_t times) {
-  // Use stored best fitness for comparison
-  size_t best_fitness = this->get_best_fitness();
+// Single tick of rtNEAT evolution with safe parallel evaluation
+ethreads::coro_task<void> model::tick_async() {
+  // Get genome indices (safe - indices remain valid across co_await)
+  auto indices = p->get_genome_indices();
+  if (indices.empty()) {
+    co_return;
+  }
 
-  while (times-- > 0) {
-    std::vector<genome *> genomes;
-    for (auto &specie : this->p->species)
-      specie.genomes.modify([&](std::vector<genome> &g) {
-        for (auto &genome : g)
-          genomes.push_back(&genome);
-      });
+  // Determine batch size for this tick
+  size_t pop_size = indices.size();
+  size_t batch = std::min(batch_size_, pop_size);
 
-    std::sort(std::begin(genomes), std::end(genomes),
-              [](const genome *a, const genome *b) { return a < b; });
+  // Prepare batch evaluation
+  eval_index_ = eval_index_ % pop_size;
 
-    auto last = std::unique(std::begin(genomes), std::end(genomes));
-    genomes.erase(last, std::end(genomes));
+  // Collect genome copies and create tasks
+  std::vector<ethreads::coro_task<size_t>> tasks;
+  std::vector<std::pair<size_t, size_t>> batch_indices;
+  tasks.reserve(batch);
+  batch_indices.reserve(batch);
 
-    if (genomes.empty()) {
-      co_await this->p->new_generation_async();
-      continue;
+  for (size_t i = 0; i < batch; i++) {
+    size_t idx = (eval_index_ + i) % pop_size;
+    auto [species_idx, genome_idx] = indices[idx];
+    batch_indices.push_back({species_idx, genome_idx});
+
+    // Get a COPY of the genome (safe to use across co_await)
+    genome g = p->get_genome_copy(species_idx, genome_idx);
+    tasks.push_back(evaluate_genome_copy_async(std::move(g)));
+  }
+
+  // Start all evaluation tasks in parallel
+  for (auto& task : tasks) {
+    task.start();
+  }
+
+  // Wait for all evaluations and update original genomes
+  for (size_t i = 0; i < batch; i++) {
+    size_t fitness = co_await tasks[i];
+    auto [species_idx, genome_idx] = batch_indices[i];
+
+    // Update original genome's fitness and age (thread-safe via pool methods)
+    p->set_genome_fitness(species_idx, genome_idx, fitness);
+    p->increment_genome_age(species_idx, genome_idx);
+  }
+
+  eval_index_ = (eval_index_ + batch) % pop_size;
+
+  // Update running averages periodically
+  if (tick_count.load() % 10 == 0) {
+    p->estimate_all_averages();
+  }
+
+  // Population management: handle replacement (sync to avoid scheduler overhead)
+  size_t current_pop = population_size();
+  size_t target_pop = p->speciating_parameters.population;
+
+  if (current_pop >= target_pop) {
+    // Try to remove worst mature organism
+    bool removed = p->remove_worst();
+
+    if (removed) {
+      // Only add offspring if we successfully removed one
+      genome child = p->reproduce_one();
+      p->add_to_species(std::move(child));
     }
+    // If removal failed (no mature organisms), skip adding to let population age
+  } else if (current_pop < target_pop) {
+    // Population below target - just add offspring without removing
+    genome child = p->reproduce_one();
+    p->add_to_species(std::move(child));
+  }
 
-    // Create evaluation tasks
-    std::vector<ethreads::coro_task<std::pair<size_t, genome *>>> tasks;
-    const std::size_t num_threads = std::thread::hardware_concurrency();
-    const std::size_t batch_size = (genomes.size() + num_threads - 1) / num_threads;
+  // Increment tick counter
+  tick_count.store(tick_count.load() + 1);
 
-    auto batch_start = std::begin(genomes);
-    while (batch_start != std::end(genomes)) {
-      auto batch_stop = batch_start;
-      std::size_t remaining = std::distance(batch_start, std::end(genomes));
-      std::advance(batch_stop, std::min(batch_size, remaining));
-      tasks.push_back(training_job_coro(batch_start, batch_stop, this->get_fitness));
-      batch_start = batch_stop;
-    }
+  co_return;
+}
 
-    // Use when_all for parallel evaluation
-    auto results = co_await ethreads::when_all(std::move(tasks));
-
-    for (auto &[fitness, genome] : results) {
-      if (fitness > best_fitness) {
-        best_fitness = fitness;
-        brain net;
-        net = *genome;
-        this->set_best_brain(net, fitness);
-      }
-    }
-
-    co_await this->p->new_generation_async();
+// Run continuous evolution for N ticks
+ethreads::coro_task<void> model::evolve_async(std::size_t ticks) {
+  while (ticks-- > 0) {
+    co_await tick_async();
   }
 }
 
@@ -176,7 +157,7 @@ bool model::save_best() {
   std::ofstream of;
   of.open(name.data(), std::ios::trunc);
   zstream compressor(&of);
-  brain best_to_save = best_state_.load().best;
+  brain best_to_save = get_best_brain();
   compressor << best_to_save;
   compressor << std::flush;
   of.close();
@@ -202,7 +183,12 @@ bool model::load_best(std::string file_name) {
     zstream decompressor(&best_file);
     brain loaded_best;
     decompressor >> loaded_best;
-    best_state_.store({loaded_best, 0});
+    // Use lock directly since we're loading (not comparing fitness)
+    {
+      std::lock_guard lock(best_brain_mutex_);
+      best_brain_ = loaded_best;
+    }
+    best_fitness_.store(0, std::memory_order_release);
     return true;
   }
 

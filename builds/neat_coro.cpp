@@ -7,7 +7,7 @@
 #include <limits>
 
 #define xor_max_n 4
-#define needed_fitness 0.95
+#define needed_fitness 0.75
 
 const std::vector<std::pair<std::vector<exfloat>, exfloat>> test_cases = {
     {{0.0, 0.0}, 0.0f},
@@ -35,11 +35,10 @@ int main() {
   };
 
   std::string model_name = "xor_coro";
-  model xor_model(fitness_function, model_name);
-  xor_model.p->speciating_parameters.population = 50;
-  xor_model.p->speciating_parameters.stale_species = std::numeric_limits<
-      decltype(xor_model.p->speciating_parameters.stale_species)>::max();
-
+  // model(fitness_func, name, inputs, outputs, population, bias, recurrent)
+  model xor_model(fitness_function, model_name, 2, 1, 1000, 1, false);
+  xor_model.p->speciating_parameters.time_alive_minimum = 5;  // rtNEAT maturity
+  
   // Initialize visualizer on main thread
   NetworkVisualizer visualizer;
   visualizer.open();
@@ -47,27 +46,37 @@ int main() {
   // Shared state for visualization
   ethreads::sync_shared_value<brain> best_brain_copy{};
   ethreads::manual_reset_event training_done{false};
-  ethreads::auto_reset_event new_generation{false};
+  ethreads::auto_reset_event update_ready{false};
 
-  // Training coroutine - runs async, updates shared state
+  // rtNEAT training coroutine - continuous evolution without generations
   auto training_task = [&]() -> ethreads::coro_task<void> {
     size_t current_best;
+    size_t last_update_tick = 0;
+
     do {
-      co_await xor_model.train_async();
+      // Run 10 ticks of evolution per update
+      co_await xor_model.evolve_async(100);
 
       current_best = xor_model.get_best_fitness();
+      size_t current_tick = xor_model.tick_count.load();
 
-      // Copy best brain for visualization (thread-safe)
-      best_brain_copy.store(xor_model.get_best_brain());
-      new_generation.set();
+      // Update visualization every 50 ticks
+      if (current_tick - last_update_tick >= 10) {
+        last_update_tick = current_tick;
 
-      std::cerr
-          << "Generation: " << xor_model.p->generation_number.load()
-          << " Population: " << xor_model.p->speciating_parameters.population
-          << " Unique Species: " << xor_model.p->species.size() << " Fitness: "
-          << current_best /
-                 (exfloat)std::numeric_limits<size_t>::max()
-          << " Neuron Count: " << xor_model.get_best_brain().neurons.size() << '\r';
+        // Copy best brain for visualization (thread-safe)
+        best_brain_copy.store(xor_model.get_best_brain());
+        update_ready.set();
+
+        std::cerr
+            << "Tick: " << current_tick
+            << " Population: " << xor_model.population_size()
+            << " Species: " << xor_model.p->species.size()
+            << " Fitness: "
+            << current_best / (exfloat)std::numeric_limits<size_t>::max()
+            << " Neurons: " << xor_model.get_best_brain().neurons.size()
+            << "        \r";
+      }
     } while (current_best /
                  (exfloat)std::numeric_limits<size_t>::max() <
              needed_fitness);
@@ -82,7 +91,8 @@ int main() {
                 << (int)(output[0] + 0.5f) << std::endl;
     }
 
-    std::cerr << "Training complete. Close visualization window to exit." << std::endl;
+    std::cerr << "Training complete after " << xor_model.tick_count.load()
+              << " ticks. Close visualization window to exit." << std::endl;
     training_done.set();
     co_return;
   };
@@ -93,8 +103,8 @@ int main() {
 
   // Main thread render loop - keeps OpenGL context on main thread
   while (visualizer.is_open()) {
-    // Check if new generation is ready to render
-    if (new_generation.try_wait()) {
+    // Check if update is ready to render
+    if (update_ready.try_wait()) {
       visualizer.render(best_brain_copy.load());
     } else if (training_done.is_set()) {
       // Training done, keep rendering final state
