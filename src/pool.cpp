@@ -38,13 +38,14 @@ pool::pool(size_t input, size_t output, size_t bias, bool rec) {
 }
 
 std::vector<std::pair<specie *, genome *>> pool::get_genomes() {
-  std::vector<std::pair<specie *, genome *>> genomes;
+  std::vector<std::pair<specie *, genome *>> result;
   for (auto s = this->species.begin(); s != this->species.end(); s++) {
-    std::lock_guard<std::mutex> lock(s->genomes_mutex);
-    for (size_t i = 0; i < (*s).genomes.size(); i++)
-      genomes.push_back(std::make_pair(&(*s), &((*s).genomes[i])));
+    s->genomes.modify([&](std::vector<genome> &g) {
+      for (size_t i = 0; i < g.size(); i++)
+        result.push_back(std::make_pair(&(*s), &g[i]));
+    });
   }
-  return genomes;
+  return result;
 }
 
 genome pool::crossover(const genome &g1, const genome &g2) {
@@ -585,9 +586,10 @@ bool pool::is_same_species(const genome &g1, const genome &g2) {
 void pool::rank_globally() {
   std::vector<genome *> global;
   for (auto s = species.begin(); s != species.end(); s++) {
-    std::lock_guard<std::mutex> lock(s->genomes_mutex);
-    for (size_t i = 0; i < s->genomes.size(); i++)
-      global.push_back(&((*s).genomes[i]));
+    s->genomes.modify([&](std::vector<genome> &g) {
+      for (size_t i = 0; i < g.size(); i++)
+        global.push_back(&g[i]);
+    });
   }
   std::sort(global.begin(), global.end(), [](genome *&a, genome *&b) -> bool {
     if (a->fitness.load() == b->fitness.load())
@@ -600,13 +602,14 @@ void pool::rank_globally() {
 }
 
 void pool::calculate_average_fitness(specie &s) {
-  std::lock_guard<std::mutex> lock(s.genomes_mutex);
-  size_t total = 0;
-  size_t genome_count = s.genomes.size();
-  for (size_t i = 0; i < genome_count; i++)
-    total += s.genomes[i].global_rank.load();
-  if (genome_count > 0)
-    s.average_fitness.store(total / genome_count);
+  s.genomes.modify([&](std::vector<genome> &g) {
+    size_t total = 0;
+    size_t genome_count = g.size();
+    for (size_t i = 0; i < genome_count; i++)
+      total += g[i].global_rank.load();
+    if (genome_count > 0)
+      s.average_fitness.store(total / genome_count);
+  });
 }
 
 size_t pool::total_average_fitness() {
@@ -618,38 +621,44 @@ size_t pool::total_average_fitness() {
 
 void pool::cull_species(const bool &cut_to_one) {
   for (auto s = species.begin(); s != species.end(); s++) {
-    std::lock_guard<std::mutex> lock(s->genomes_mutex);
-    std::sort(s->genomes.begin(), s->genomes.end(),
-              [](genome &a, genome &b) { return a.fitness.load() > b.fitness.load(); });
-    size_t remaining = std::ceil(s->genomes.size() * 1.0f / 2.0f);
-    if (cut_to_one)
-      remaining = 1;
-    while (s->genomes.size() > remaining)
-      s->genomes.pop_back();
-    s->genomes.shrink_to_fit();  // Reclaim memory from culled genomes
+    s->genomes.modify([&](std::vector<genome> &g) {
+      std::sort(g.begin(), g.end(),
+                [](genome &a, genome &b) { return a.fitness.load() > b.fitness.load(); });
+      size_t remaining = std::ceil(g.size() * 1.0f / 2.0f);
+      if (cut_to_one)
+        remaining = 1;
+      while (g.size() > remaining)
+        g.pop_back();
+      g.shrink_to_fit();  // Reclaim memory from culled genomes
+    });
   }
 }
 
 ethreads::coro_task<genome> pool::breed_child(specie &s) {
   genome child(network_info, mutation_rates);
   std::uniform_real_distribution<exfloat> distributor(0.0f, 1.0f);
+  bool should_return_early = false;
 
-  // Lock while accessing genomes to select parents
-  {
-    std::lock_guard<std::mutex> lock(s.genomes_mutex);
-    if (s.genomes.empty()) {
+  // Access genomes via sync_shared_value to select parents
+  s.genomes.modify([&](std::vector<genome> &g) {
+    if (g.empty()) {
       // No genomes to breed from, return empty child
-      co_return child;
+      should_return_early = true;
+      return;
     }
-    std::uniform_int_distribution<size_t> choose_genome(0, s.genomes.size() - 1);
+    std::uniform_int_distribution<size_t> choose_genome(0, g.size() - 1);
     if (eneat::get_rand(distributor) < mutation_rates.crossover_chance) {
       // Copy genomes for crossover (to release lock before mutation)
-      genome g1 = s.genomes[eneat::get_rand(choose_genome)];
-      genome g2 = s.genomes[eneat::get_rand(choose_genome)];
+      genome g1 = g[eneat::get_rand(choose_genome)];
+      genome g2 = g[eneat::get_rand(choose_genome)];
       child = crossover(g1, g2);
     } else {
-      child = s.genomes[eneat::get_rand(choose_genome)];
+      child = g[eneat::get_rand(choose_genome)];
     }
+  });
+
+  if (should_return_early) {
+    co_return child;
   }
 
   // Mutate the child asynchronously (outside the lock)
@@ -660,17 +669,21 @@ ethreads::coro_task<genome> pool::breed_child(specie &s) {
 void pool::remove_stale_species() {
   auto s = species.begin();
   while (s != species.end()) {
-    size_t best_fitness;
-    {
-      std::lock_guard<std::mutex> lock(s->genomes_mutex);
-      if (s->genomes.empty()) {
-        species.erase(s++);
-        continue;
+    size_t best_fitness = 0;
+    bool is_empty = false;
+    s->genomes.modify([&](std::vector<genome> &g) {
+      if (g.empty()) {
+        is_empty = true;
+        return;
       }
-      genome &g = *(std::max_element(
-          s->genomes.begin(), s->genomes.end(),
+      genome &best = *(std::max_element(
+          g.begin(), g.end(),
           [](genome &a, genome &b) -> bool { return a.fitness.load() < b.fitness.load(); }));
-      best_fitness = g.fitness.load();
+      best_fitness = best.fitness.load();
+    });
+    if (is_empty) {
+      species.erase(s++);
+      continue;
     }
     if (best_fitness > s->top_fitness.load()) {
       s->top_fitness.store(best_fitness);
@@ -703,9 +716,14 @@ void pool::remove_weak_species() {
 void pool::add_to_species(const genome &child) {
   auto s = species.begin();
   while (s != species.end()) {
-    std::lock_guard<std::mutex> lock(s->genomes_mutex);
-    if (!s->genomes.empty() && is_same_species(child, s->genomes[0])) {
-      s->genomes.push_back(child);
+    bool added = false;
+    s->genomes.modify([&](std::vector<genome> &g) {
+      if (!g.empty() && is_same_species(child, g[0])) {
+        g.push_back(child);
+        added = true;
+      }
+    });
+    if (added) {
       return;
     }
     s++;
@@ -713,7 +731,9 @@ void pool::add_to_species(const genome &child) {
 
   // No matching species found, create new one
   specie new_specie;
-  new_specie.genomes.push_back(child);
+  new_specie.genomes.modify([&](std::vector<genome> &g) {
+    g.push_back(child);
+  });
   species.push_back(new_specie);
 }
 
@@ -741,16 +761,17 @@ ethreads::coro_task<void> pool::cull_species_async(const bool &cut_to_one) {
   for (auto &s : species) {
     cull_tasks.push_back(
         [](specie &sp, bool cut) -> ethreads::coro_task<void> {
-          // Lock the genomes mutex for the duration of this operation
-          std::lock_guard<std::mutex> lock(sp.genomes_mutex);
-          std::sort(sp.genomes.begin(), sp.genomes.end(),
-                    [](genome &a, genome &b) { return a.fitness.load() > b.fitness.load(); });
-          size_t remaining = std::ceil(sp.genomes.size() * 1.0f / 2.0f);
-          if (cut)
-            remaining = 1;
-          while (sp.genomes.size() > remaining)
-            sp.genomes.pop_back();
-          sp.genomes.shrink_to_fit();  // Reclaim memory from culled genomes
+          // Access genomes via sync_shared_value
+          sp.genomes.modify([&](std::vector<genome> &g) {
+            std::sort(g.begin(), g.end(),
+                      [](genome &a, genome &b) { return a.fitness.load() > b.fitness.load(); });
+            size_t remaining = std::ceil(g.size() * 1.0f / 2.0f);
+            if (cut)
+              remaining = 1;
+            while (g.size() > remaining)
+              g.pop_back();
+            g.shrink_to_fit();  // Reclaim memory from culled genomes
+          });
           co_return;
         }(s, cut_to_one));
   }
@@ -762,11 +783,12 @@ ethreads::coro_task<void> pool::cull_species_async(const bool &cut_to_one) {
 ethreads::coro_task<void> pool::rank_globally_async() {
   std::vector<genome *> global;
 
-  // Collect pointers to all genomes while holding locks
+  // Collect pointers to all genomes via sync_shared_value
   for (auto &s : species) {
-    std::lock_guard<std::mutex> lock(s.genomes_mutex);
-    for (size_t i = 0; i < s.genomes.size(); i++)
-      global.push_back(&s.genomes[i]);
+    s.genomes.modify([&](std::vector<genome> &g) {
+      for (size_t i = 0; i < g.size(); i++)
+        global.push_back(&g[i]);
+    });
   }
 
   // Sort all genomes by fitness
@@ -794,14 +816,15 @@ ethreads::coro_task<void> pool::calculate_all_average_fitness_async() {
   for (auto &s : species) {
     fitness_tasks.push_back(
         [](specie &sp) -> ethreads::coro_task<void> {
-          // Lock the genomes mutex while iterating
-          std::lock_guard<std::mutex> lock(sp.genomes_mutex);
-          size_t total = 0;
-          size_t genome_count = sp.genomes.size();
-          for (size_t i = 0; i < genome_count; i++)
-            total += sp.genomes[i].global_rank.load();
-          if (genome_count > 0)
-            sp.average_fitness.store(total / genome_count);
+          // Access genomes via sync_shared_value
+          sp.genomes.modify([&](std::vector<genome> &g) {
+            size_t total = 0;
+            size_t genome_count = g.size();
+            for (size_t i = 0; i < genome_count; i++)
+              total += g[i].global_rank.load();
+            if (genome_count > 0)
+              sp.average_fitness.store(total / genome_count);
+          });
           co_return;
         }(s));
   }
@@ -1049,7 +1072,9 @@ std::istream &operator>>(std::istream &input, pool &p) {
         new_genome.genes[new_gene.innovation_num] = new_gene;
       }
 
-      new_specie.genomes.push_back(new_genome);
+      new_specie.genomes.modify([&](std::vector<genome> &g) {
+        g.push_back(new_genome);
+      });
     }
 
     p.species.push_back(new_specie);
@@ -1070,21 +1095,22 @@ std::ostream &operator<<(std::ostream &output, pool &p) {
   output << p.speciating_parameters;
   output << p.mutation_rates;
   output << p.species.size() << std::endl;
-  for (auto specie : p.species) {
+  for (auto &sp : p.species) {
     output << "   ";
-    output << specie.top_fitness.load() << " ";
-    output << specie.average_fitness.load() << " ";
-    output << specie.staleness.load() << std::endl;
-    output << "   " << specie.genomes.size() << std::endl;
-    for (size_t i = 0; i < specie.genomes.size(); i++) {
+    output << sp.top_fitness.load() << " ";
+    output << sp.average_fitness.load() << " ";
+    output << sp.staleness.load() << std::endl;
+    auto genomes_copy = sp.genomes.load();
+    output << "   " << genomes_copy.size() << std::endl;
+    for (size_t i = 0; i < genomes_copy.size(); i++) {
       output << "      ";
-      output << specie.genomes[i].fitness.load() << " ";
-      output << specie.genomes[i].adjusted_fitness.load() << " ";
-      output << specie.genomes[i].global_rank.load() << std::endl;
-      output << specie.genomes[i].mutation_rates;
-      output << "      " << specie.genomes[i].max_neuron << " "
-             << specie.genomes[i].genes.size() << std::endl;
-      for (auto pair : specie.genomes[i].genes) {
+      output << genomes_copy[i].fitness.load() << " ";
+      output << genomes_copy[i].adjusted_fitness.load() << " ";
+      output << genomes_copy[i].global_rank.load() << std::endl;
+      output << genomes_copy[i].mutation_rates;
+      output << "      " << genomes_copy[i].max_neuron << " "
+             << genomes_copy[i].genes.size() << std::endl;
+      for (auto pair : genomes_copy[i].genes) {
         gene &g = pair.second;
         output << "         ";
         output << g.innovation_num << " " << g.from_node << " " << g.to_node

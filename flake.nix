@@ -14,9 +14,11 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             zig
+            gcc
             zlib
             pkg-config
             raylib
+            valgrind
           ];
 
           shellHook = ''

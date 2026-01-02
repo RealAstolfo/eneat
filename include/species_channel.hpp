@@ -100,8 +100,14 @@ private:
   void add_to_species_impl(genome child) {
     auto s = species_.begin();
     while (s != species_.end()) {
-      if (is_same_species_(child, s->genomes[0])) {
-        s->genomes.push_back(std::move(child));
+      bool added = false;
+      s->genomes.modify([&](std::vector<genome> &g) {
+        if (!g.empty() && is_same_species_(child, g[0])) {
+          g.push_back(std::move(child));
+          added = true;
+        }
+      });
+      if (added) {
         return;
       }
       s++;
@@ -109,7 +115,9 @@ private:
 
     // No matching species found, create new one
     specie new_specie;
-    new_specie.genomes.push_back(std::move(child));
+    new_specie.genomes.modify([&](std::vector<genome> &g) {
+      g.push_back(std::move(child));
+    });
     species_.push_back(std::move(new_specie));
   }
 

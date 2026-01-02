@@ -10,11 +10,15 @@ LDFLAGS = $(LIB) -O3
 
 # Debug flags for Valgrind (no optimization for accurate line numbers)
 CXX_DEBUG = g++
-CFLAGS_DEBUG = -O0 -g3 -Wall -Wextra -pedantic $(INC)
+CFLAGS_DEBUG = -O0 -g3 -Wall -Wextra -pedantic $(INC) $(ZLIB_CFLAGS)
 CXXFLAGS_DEBUG = $(CFLAGS_DEBUG) -std=c++20
 
-ZLIB = `pkgconf --cflags --libs zlib`
-RAYLIB = `pkg-config --cflags --libs raylib`
+ZLIB_CFLAGS = `pkgconf --cflags zlib`
+ZLIB_LIBS = `pkgconf --libs zlib`
+ZLIB = $(ZLIB_CFLAGS) $(ZLIB_LIBS)
+RAYLIB_CFLAGS = `pkg-config --cflags raylib`
+RAYLIB_LIBS = `pkg-config --libs raylib`
+RAYLIB = $(RAYLIB_CFLAGS) $(RAYLIB_LIBS)
 
 # AI
 brain.o:

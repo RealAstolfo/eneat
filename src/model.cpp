@@ -65,9 +65,10 @@ void model::train(std::size_t times) {
   while (times-- > 0) {
     std::vector<genome *> genomes;
     for (auto &specie : this->p->species)
-      std::transform(std::begin(specie.genomes), std::end(specie.genomes),
-                     std::back_inserter(genomes),
-                     [](genome &g) -> genome * { return &g; });
+      specie.genomes.modify([&](std::vector<genome> &g) {
+        for (auto &genome : g)
+          genomes.push_back(&genome);
+      });
 
     std::sort(std::begin(genomes), std::end(genomes),
               [](const genome *a, const genome *b) { return a < b; });
@@ -123,9 +124,10 @@ ethreads::coro_task<void> model::train_async(std::size_t times) {
   while (times-- > 0) {
     std::vector<genome *> genomes;
     for (auto &specie : this->p->species)
-      std::transform(std::begin(specie.genomes), std::end(specie.genomes),
-                     std::back_inserter(genomes),
-                     [](genome &g) -> genome * { return &g; });
+      specie.genomes.modify([&](std::vector<genome> &g) {
+        for (auto &genome : g)
+          genomes.push_back(&genome);
+      });
 
     std::sort(std::begin(genomes), std::end(genomes),
               [](const genome *a, const genome *b) { return a < b; });
@@ -174,7 +176,8 @@ bool model::save_best() {
   std::ofstream of;
   of.open(name.data(), std::ios::trunc);
   zstream compressor(&of);
-  compressor << best_state_.load().best;
+  brain best_to_save = best_state_.load().best;
+  compressor << best_to_save;
   compressor << std::flush;
   of.close();
   return true;

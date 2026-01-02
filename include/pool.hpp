@@ -39,8 +39,8 @@ struct pool {
   // Channel-based species management (lazy initialized)
   std::unique_ptr<eneat::species_channel> species_chan;
 
-  ethreads::sync_shared_value<size_t> generation_number{1};
-  ethreads::sync_shared_value<size_t> max_fitness{0};
+  ethreads::sync_shared_value<size_t, ethreads::mutex_lock_policy> generation_number{1};
+  ethreads::sync_shared_value<size_t, ethreads::mutex_lock_policy> max_fitness{0};
   mutation_rate_container mutation_rates;
   speciating_parameter_container speciating_parameters;
   network_info_container network_info;

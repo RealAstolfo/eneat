@@ -16,9 +16,9 @@
 typedef struct brain brain;
 
 struct genome {
-  ethreads::sync_shared_value<size_t> fitness{0};
-  ethreads::sync_shared_value<size_t> adjusted_fitness{0};
-  ethreads::sync_shared_value<size_t> global_rank{0};
+  ethreads::sync_shared_value<size_t, ethreads::mutex_lock_policy> fitness{0};
+  ethreads::sync_shared_value<size_t, ethreads::mutex_lock_policy> adjusted_fitness{0};
+  ethreads::sync_shared_value<size_t, ethreads::mutex_lock_policy> global_rank{0};
   size_t max_neuron;
   bool can_be_recurrent = false;
   mutation_rate_container mutation_rates;
