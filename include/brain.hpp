@@ -35,8 +35,39 @@ struct brain {
   // Hebbian learning: apply weight modifications based on activations
   void apply_hebbian_learning();
 
+  // rtNEAT Hebbian learning algorithms
+  // oldhebbian: Original rtNEAT algorithm
+  exfloat oldhebbian(exfloat weight, exfloat maxweight, exfloat active_in,
+                     exfloat active_out, exfloat hebb_rate,
+                     exfloat pre_rate, exfloat post_rate);
+
+  // hebbian: Floreano & Urzelai 2000 algorithm
+  exfloat hebbian(exfloat weight, exfloat maxweight, exfloat active_in,
+                  exfloat active_out, exfloat hebb_rate,
+                  exfloat pre_rate, exfloat post_rate);
+
   // Reset network state (activations, counters)
   void reset_state();
+
+  // rtNEAT: Flush network - reset all activations
+  // Reference: network.cpp flush methods
+  void flush();
+
+  // rtNEAT: Recursive flushback from a specific neuron
+  // Reference: nnode.cpp:206-235
+  void flushback(size_t neuron_idx);
+
+  // Load input values using sensor_load (proper time-delay shifting)
+  void load_sensors(const std::vector<exfloat> &input);
+
+  // Override specific output neurons
+  void override_outputs(const std::vector<exfloat> &values);
+
+  // Clear all overrides
+  void clear_overrides();
+
+  // Check if network has finished activating (all outputs have values)
+  bool outputs_ready() const;
 };
 
 std::istream &operator>>(std::istream &input, brain &b);

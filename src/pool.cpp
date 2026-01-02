@@ -111,7 +111,21 @@ void pool::increment_genome_age(size_t species_idx, size_t genome_idx) {
 
 // Default crossover - delegates to multipoint
 genome pool::crossover(const genome &g1, const genome &g2) {
-  return crossover_multipoint(g1, g2);
+  // rtNEAT: Select mating method based on probabilities
+  std::uniform_real_distribution<exfloat> dist(0.0f, 1.0f);
+  exfloat roll = eneat::get_rand(dist);
+
+  // multipoint_avg_chance and singlepoint_chance determine the probabilities
+  // Remaining probability goes to multipoint
+  exfloat multipoint_prob = 1.0f - mutation_rates.multipoint_avg_chance - mutation_rates.singlepoint_chance;
+
+  if (roll < multipoint_prob) {
+    return crossover_multipoint(g1, g2);
+  } else if (roll < multipoint_prob + mutation_rates.multipoint_avg_chance) {
+    return crossover_multipoint_avg(g1, g2);
+  } else {
+    return crossover_singlepoint(g1, g2);
+  }
 }
 
 // Multipoint crossover: randomly select from matching genes, take excess from fitter parent
@@ -345,88 +359,151 @@ inline bool is_bias(size_t &neuron, network_info_container &network_info) {
 }
 
 ethreads::coro_task<void> pool::mutate_link(genome &g, const bool &force_bias) {
-  std::uniform_int_distribution<size_t> distributor1(0, g.max_neuron - 1);
-  size_t neuron1 = eneat::get_rand(distributor1);
-  std::uniform_int_distribution<size_t> distributor2(
-      network_info.input_size + network_info.bias_size, g.max_neuron - 1);
-  size_t neuron2 = eneat::get_rand(distributor2);
-  if (is_output(neuron1, network_info) && is_output(neuron2, network_info))
-    co_return;
-  if (is_bias(neuron2, network_info))
-    co_return;
-  if (neuron1 == neuron2 && (!force_bias))
-    co_return;
-  if (is_output(neuron1, network_info))
-    std::swap(neuron1, neuron2);
-  if (force_bias) {
-    std::uniform_int_distribution<size_t> bias_choose(
-        network_info.input_size,
-        network_info.input_size + network_info.output_size - 1);
-    neuron1 = eneat::get_rand(bias_choose);
-  }
-  if (!g.network_info.recurrent) {
-    bool has_recurrence = false;
-    // Bias and input nodes cannot create cycles when used as source
-    if (is_bias(neuron1, network_info) || is_input(neuron1, network_info))
-      has_recurrence = false;
-    else {
-      // Build adjacency list of current connections
-      std::unordered_map<size_t, std::vector<size_t>> connections;
-      for (const auto &gene : g.genes) {
-        if (gene.second.enabled) {
-          connections[gene.second.from_node].push_back(gene.second.to_node);
+  // rtNEAT: recur_only_prob - force recurrent links only
+  std::uniform_real_distribution<exfloat> prob_dist(0.0f, 1.0f);
+  bool force_recurrent = g.can_be_recurrent &&
+                         eneat::get_rand(prob_dist) < mutation_rates.recur_only_prob;
+
+  // Retry loop for finding valid connection (rtNEAT newlink_tries)
+  for (size_t attempt = 0; attempt < speciating_parameters.newlink_tries; attempt++) {
+    std::uniform_int_distribution<size_t> distributor1(0, g.max_neuron - 1);
+    size_t neuron1 = eneat::get_rand(distributor1);
+    std::uniform_int_distribution<size_t> distributor2(
+        network_info.input_size + network_info.bias_size, g.max_neuron - 1);
+    size_t neuron2 = eneat::get_rand(distributor2);
+
+    // Skip invalid combinations and retry
+    if (is_output(neuron1, network_info) && is_output(neuron2, network_info))
+      continue;
+    if (is_bias(neuron2, network_info))
+      continue;
+    if (neuron1 == neuron2 && (!force_bias))
+      continue;
+    if (is_output(neuron1, network_info))
+      std::swap(neuron1, neuron2);
+    if (force_bias) {
+      std::uniform_int_distribution<size_t> bias_choose(
+          network_info.input_size,
+          network_info.input_size + network_info.output_size - 1);
+      neuron1 = eneat::get_rand(bias_choose);
+    }
+
+    // Check for recurrence in non-recurrent networks
+    if (!g.network_info.recurrent) {
+      bool has_recurrence = false;
+      // Bias and input nodes cannot create cycles when used as source
+      if (is_bias(neuron1, network_info) || is_input(neuron1, network_info))
+        has_recurrence = false;
+      else {
+        // Build adjacency list of current connections
+        std::unordered_map<size_t, std::vector<size_t>> connections;
+        for (const auto &gene : g.genes) {
+          if (gene.second.enabled) {
+            connections[gene.second.from_node].push_back(gene.second.to_node);
+          }
         }
-      }
-      // Add the proposed new connection
-      connections[neuron1].push_back(neuron2);
+        // Add the proposed new connection
+        connections[neuron1].push_back(neuron2);
 
-      // BFS from neuron2 (destination) to check if we can reach neuron1 (source)
-      // If we can, adding neuron1->neuron2 would create a cycle
-      std::queue<size_t> que;
-      que.push(neuron2);  // Start from destination
-      std::unordered_set<size_t> visited;
-      visited.insert(neuron2);
-      has_recurrence = false;
+        // BFS from neuron2 (destination) to check if we can reach neuron1 (source)
+        // If we can, adding neuron1->neuron2 would create a cycle
+        std::queue<size_t> que;
+        que.push(neuron2);  // Start from destination
+        std::unordered_set<size_t> visited;
+        visited.insert(neuron2);
+        has_recurrence = false;
 
-      while (!que.empty()) {
-        size_t tmp = que.front();
-        que.pop();
+        while (!que.empty()) {
+          size_t tmp = que.front();
+          que.pop();
 
-        // If we reach the source from the destination, it's a cycle
-        if (tmp == neuron1) {
-          has_recurrence = true;
-          break;
-        }
+          // If we reach the source from the destination, it's a cycle
+          if (tmp == neuron1) {
+            has_recurrence = true;
+            break;
+          }
 
-        for (const auto &next_node : connections[tmp]) {
-          if (visited.find(next_node) == visited.end()) {
-            que.push(next_node);
-            visited.insert(next_node);
+          for (const auto &next_node : connections[tmp]) {
+            if (visited.find(next_node) == visited.end()) {
+              que.push(next_node);
+              visited.insert(next_node);
+            }
           }
         }
       }
+
+      if (has_recurrence)
+        continue;  // Retry instead of returning
     }
 
-    if (has_recurrence)
-      co_return;
+    // rtNEAT: recur_only_prob - if force_recurrent, skip non-recurrent connections
+    if (force_recurrent) {
+      // Check if this connection would be recurrent (self-loop or creates cycle)
+      bool is_recurrent = (neuron1 == neuron2);  // Self-loop is always recurrent
+
+      if (!is_recurrent && !is_bias(neuron1, network_info) && !is_input(neuron1, network_info)) {
+        // Check if adding neuron1->neuron2 creates a cycle
+        std::unordered_map<size_t, std::vector<size_t>> connections;
+        for (const auto &gene : g.genes) {
+          if (gene.second.enabled) {
+            connections[gene.second.from_node].push_back(gene.second.to_node);
+          }
+        }
+        connections[neuron1].push_back(neuron2);
+
+        std::queue<size_t> que;
+        que.push(neuron2);
+        std::unordered_set<size_t> visited;
+        visited.insert(neuron2);
+
+        while (!que.empty()) {
+          size_t tmp = que.front();
+          que.pop();
+          if (tmp == neuron1) {
+            is_recurrent = true;
+            break;
+          }
+          for (const auto &next_node : connections[tmp]) {
+            if (visited.find(next_node) == visited.end()) {
+              que.push(next_node);
+              visited.insert(next_node);
+            }
+          }
+        }
+      }
+
+      if (!is_recurrent)
+        continue;  // Skip non-recurrent connections when force_recurrent
+    }
+
+    // Check if connection already exists
+    bool already_exists = false;
+    for (auto it = g.genes.begin(); it != g.genes.end(); it++) {
+      if (it->second.from_node == neuron1 && it->second.to_node == neuron2) {
+        already_exists = true;
+        break;
+      }
+    }
+    if (already_exists)
+      continue;  // Retry instead of returning
+
+    // Found valid connection - add it
+    gene new_gene;
+    new_gene.from_node = neuron1;
+    new_gene.to_node = neuron2;
+
+    // Direct innovation tracking (no channel service needed for rtNEAT)
+    new_gene.innovation_num = innovation_chan.add_gene_direct(
+        new_gene.from_node, new_gene.to_node);
+    std::uniform_real_distribution<exfloat> weight_generator(0.0f, 1.0f);
+    std::uniform_int_distribution<size_t> act_generator(ai_func_type::FIRST,
+                                                        ai_func_type::LAST);
+    new_gene.weight = eneat::get_rand(weight_generator) * 4.0f - 2.0f;
+    new_gene.activation = (ai_func_type)eneat::get_rand(act_generator);
+    g.genes[new_gene.innovation_num] = new_gene;
+    co_return;  // Success - exit after adding gene
   }
-
-  gene new_gene;
-  new_gene.from_node = neuron1;
-  new_gene.to_node = neuron2;
-  for (auto it = g.genes.begin(); it != g.genes.end(); it++)
-    if (it->second.from_node == neuron1 && it->second.to_node == neuron2)
-      co_return;
-
-  // Direct innovation tracking (no channel service needed for rtNEAT)
-  new_gene.innovation_num = innovation_chan.add_gene_direct(
-      new_gene.from_node, new_gene.to_node);
-  std::uniform_real_distribution<exfloat> weight_generator(0.0f, 1.0f);
-  std::uniform_int_distribution<size_t> act_generator(ai_func_type::FIRST,
-                                                      ai_func_type::LAST);
-  new_gene.weight = eneat::get_rand(weight_generator) * 4.0f - 2.0f;
-  new_gene.activation = (ai_func_type)eneat::get_rand(act_generator);
-  g.genes[new_gene.innovation_num] = new_gene;
+  // Failed to find valid connection after all attempts - silently return
   co_return;
 }
 
@@ -507,29 +584,16 @@ ethreads::coro_task<void> pool::mutate_bias_neuron(genome &g) {
 }
 
 ethreads::coro_task<void> pool::mutate(genome &g) {
-  exfloat coefficient[2] = {0.95f, 1.05263f};
-  std::uniform_int_distribution<int> coin_flip(0, 1);
-  g.mutation_rates.enable_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.disable_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.connection_mutate_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.neuron_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.link_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.bias_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.bias_neuron_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.crossover_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.perturb_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.activation_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
+  // Self-adaptive mutation rates disabled to match rtNEAT reference behavior
+  // (Rates are now static as defined in mutation_rate_container defaults)
+
   std::uniform_real_distribution<exfloat> mutate_or_not_mutate(0.0f, 1.0f);
+
+  // rtNEAT: Track if structural mutation occurred
+  // Trait mutations are only performed if no structural mutation happened
+  bool structural_mutation = false;
+  size_t genes_before = g.genes.size();
+
   if (eneat::get_rand(mutate_or_not_mutate) <
       g.mutation_rates.connection_mutate_chance)
     co_await mutate_weight(g);
@@ -550,6 +614,11 @@ ethreads::coro_task<void> pool::mutate(genome &g) {
     if (eneat::get_rand(mutate_or_not_mutate) < p)
       co_await mutate_neuron(g);
     p -= 1.0f;
+  }
+
+  // Check if structural mutation occurred (genes added)
+  if (g.genes.size() > genes_before) {
+    structural_mutation = true;
   }
 
   p = g.mutation_rates.bias_mutation_chance;
@@ -579,38 +648,35 @@ ethreads::coro_task<void> pool::mutate(genome &g) {
       co_await mutate_enable_disable(g, false);
     p -= 1.0f;
   }
+
+  // rtNEAT: Trait mutations only if no structural mutation occurred
+  if (!structural_mutation) {
+    // Trait mutations (Hebbian learning parameters)
+    if (eneat::get_rand(mutate_or_not_mutate) < g.mutation_rates.trait_mutation_chance)
+      co_await mutate_random_trait(g);
+
+    if (eneat::get_rand(mutate_or_not_mutate) < g.mutation_rates.link_trait_mutation_chance)
+      co_await mutate_link_trait(g);
+
+    if (eneat::get_rand(mutate_or_not_mutate) < g.mutation_rates.node_trait_mutation_chance)
+      co_await mutate_node_trait(g);
+  }
+
   co_return;
 }
 
 // Synchronous mutation for single-threaded initialization
 void pool::mutate_sync(genome &g) {
-  exfloat coefficient[2] = {0.95f, 1.05263f};
-  std::uniform_int_distribution<int> coin_flip(0, 1);
-  g.mutation_rates.enable_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.disable_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.connection_mutate_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.neuron_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.link_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.bias_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.bias_neuron_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.crossover_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.perturb_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
-  g.mutation_rates.activation_mutation_chance *=
-      coefficient[eneat::get_rand(coin_flip)];
+  // Self-adaptive mutation rates disabled to match rtNEAT reference behavior
+  // (Rates are now static as defined in mutation_rate_container defaults)
 
   std::uniform_real_distribution<exfloat> mutate_or_not_mutate(0.0f, 1.0f);
   std::uniform_int_distribution<size_t> act_dist(ai_func_type::FIRST,
                                                  ai_func_type::LAST);
   std::uniform_real_distribution<exfloat> weight_dist(0.0f, 1.0f);
+
+  // rtNEAT: Track if structural mutation occurred
+  size_t genes_before = g.genes.size();
 
   // Weight mutation (inline)
   if (eneat::get_rand(mutate_or_not_mutate) <
@@ -756,6 +822,191 @@ void pool::mutate_sync(genome &g) {
       }
     }
     p -= 1.0f;
+  }
+
+  // rtNEAT: Trait mutations only if no structural mutation occurred
+  bool structural_mutation = (g.genes.size() > genes_before);
+
+  if (!structural_mutation) {
+    // Trait mutations (Hebbian learning parameters) - sync versions
+    if (eneat::get_rand(mutate_or_not_mutate) < g.mutation_rates.trait_mutation_chance) {
+      if (!g.traits.empty()) {
+        std::uniform_int_distribution<size_t> trait_dist(0, g.traits.size() - 1);
+        size_t trait_idx = eneat::get_rand(trait_dist);
+        g.traits[trait_idx].mutate(mutation_rates.trait_param_mutation_power, 0.5f);
+      }
+    }
+
+    if (eneat::get_rand(mutate_or_not_mutate) < g.mutation_rates.link_trait_mutation_chance) {
+      if (!g.genes.empty() && !g.traits.empty()) {
+        std::uniform_int_distribution<size_t> gene_dist(0, g.genes.size() - 1);
+        std::uniform_int_distribution<size_t> trait_dist(0, g.traits.size());  // 0 = no trait
+        size_t gene_idx = eneat::get_rand(gene_dist);
+        auto it = g.genes.begin();
+        std::advance(it, gene_idx);
+        it->second.trait_id = eneat::get_rand(trait_dist);
+        // rtNEAT: Update mutation_num for speciation distance calculation
+        it->second.mutation_num += 1.0f;
+      }
+    }
+
+    // Node trait mutation (sync version)
+    if (eneat::get_rand(mutate_or_not_mutate) < g.mutation_rates.node_trait_mutation_chance) {
+      if (!g.traits.empty()) {
+        // Collect all unique node IDs
+        std::set<size_t> nodes;
+        for (const auto& [_, gene] : g.genes) {
+          nodes.insert(gene.from_node);
+          nodes.insert(gene.to_node);
+        }
+        if (!nodes.empty()) {
+          std::uniform_int_distribution<size_t> node_dist(0, nodes.size() - 1);
+          size_t node_idx = eneat::get_rand(node_dist);
+          auto node_it = nodes.begin();
+          std::advance(node_it, node_idx);
+          size_t node_id = *node_it;
+
+          // Check if node is frozen
+          if (g.frozen_nodes.count(node_id) == 0) {
+            std::uniform_int_distribution<size_t> trait_dist(0, g.traits.size());
+            g.node_traits[node_id] = eneat::get_rand(trait_dist);
+          }
+        }
+      }
+    }
+  }
+}
+
+// Weight-only mutation for super champion offspring
+// rtNEAT reference: 80% of super champion offspring get weight mutations only
+void pool::mutate_weight_only(genome &g) {
+  std::uniform_real_distribution<exfloat> dist(0.0f, 1.0f);
+  exfloat step = mutation_rates.step_size;
+
+  // 50% chance of severe mutation mode (higher mutation rates)
+  bool severe = eneat::get_rand(dist) > 0.5f;
+  exfloat gausspoint = severe ? 0.3f : 0.1f;
+  exfloat coldgausspoint = severe ? 0.1f : 0.05f;
+
+  // Track gene position for position-based mutation power
+  size_t gene_total = g.genes.size();
+  size_t endpart = static_cast<size_t>(gene_total * 0.8f);
+  size_t num = 0;
+
+  for (auto& [_, gene] : g.genes) {
+    // Skip frozen genes
+    if (gene.frozen) {
+      num++;
+      continue;
+    }
+
+    // Newer genes (after 80% mark) get more aggressive mutation
+    exfloat power_mod = (num > endpart) ? 1.5f : 1.0f;
+    exfloat effective_step = step * power_mod;
+
+    exfloat roll = eneat::get_rand(dist);
+    if (roll < gausspoint) {
+      // Gaussian: perturb existing weight
+      gene.weight += eneat::get_rand(dist) * effective_step * 2.0f - effective_step;
+    } else if (roll < gausspoint + coldgausspoint) {
+      // Cold Gaussian: replace weight entirely
+      gene.weight = eneat::get_rand(dist) * 4.0f - 2.0f;
+    }
+    // else: no change to this gene
+
+    gene.mutation_num += 1.0f;
+    num++;
+  }
+}
+
+// rtNEAT: mutate_add_sensor - connects unconnected sensors to outputs
+// This finds input sensors that aren't connected to all outputs and adds connections
+// Reference: genome.cpp:1804
+ethreads::coro_task<void> pool::mutate_add_sensor(genome &g) {
+  mutate_add_sensor_sync(g);
+  co_return;
+}
+
+void pool::mutate_add_sensor_sync(genome &g) {
+  std::uniform_real_distribution<exfloat> weight_dist(-3.0f, 3.0f);
+  std::uniform_int_distribution<size_t> trait_dist(0, std::max((size_t)1, g.traits.size()) - 1);
+
+  // Find all input sensor node IDs
+  std::vector<size_t> sensor_ids;
+  for (size_t i = 0; i < network_info.input_size; i++) {
+    sensor_ids.push_back(i);
+  }
+
+  // Find all output node IDs
+  std::vector<size_t> output_ids;
+  size_t output_start = network_info.input_size + network_info.bias_size;
+  for (size_t i = 0; i < network_info.output_size; i++) {
+    output_ids.push_back(output_start + i);
+  }
+
+  // For each sensor, count how many outputs it's connected to
+  // and eliminate sensors that are already fully connected
+  std::vector<size_t> available_sensors;
+  for (size_t sensor_id : sensor_ids) {
+    size_t output_connections = 0;
+    for (const auto& [_, gene] : g.genes) {
+      if (gene.from_node == sensor_id && gene.enabled) {
+        // Check if to_node is an output
+        for (size_t out_id : output_ids) {
+          if (gene.to_node == out_id) {
+            output_connections++;
+            break;
+          }
+        }
+      }
+    }
+    // If not connected to all outputs, this sensor is available
+    if (output_connections < output_ids.size()) {
+      available_sensors.push_back(sensor_id);
+    }
+  }
+
+  // If all sensors are fully connected, nothing to do
+  if (available_sensors.empty()) {
+    return;
+  }
+
+  // Pick a random sensor from available ones
+  std::uniform_int_distribution<size_t> sensor_choice(0, available_sensors.size() - 1);
+  size_t chosen_sensor = available_sensors[eneat::get_rand(sensor_choice)];
+
+  // Add connections from chosen sensor to any outputs not already connected
+  for (size_t output_id : output_ids) {
+    // Check if connection already exists
+    bool exists = false;
+    for (const auto& [_, gene] : g.genes) {
+      if (gene.from_node == chosen_sensor && gene.to_node == output_id) {
+        exists = true;
+        break;
+      }
+    }
+
+    if (!exists) {
+      // Get innovation number for this connection
+      size_t innov = innovation_chan.add_gene_direct(chosen_sensor, output_id);
+
+      // Create new gene
+      gene new_gene;
+      new_gene.innovation_num = innov;
+      new_gene.from_node = chosen_sensor;
+      new_gene.to_node = output_id;
+      new_gene.weight = eneat::get_rand(weight_dist);
+      new_gene.enabled = true;
+      new_gene.is_recurrent = false;
+      new_gene.mutation_num = 0.0f;
+
+      // Assign random trait if available
+      if (!g.traits.empty()) {
+        new_gene.trait_id = eneat::get_rand(trait_dist) + 1;  // trait_id is 1-indexed
+      }
+
+      g.genes[innov] = new_gene;
+    }
   }
 }
 
@@ -941,9 +1192,19 @@ void pool::remove_stale_species() {
 }
 
 void pool::remove_weak_species() {
+  // Protect against edge cases that would remove all species
+  if (species.empty()) return;
+
   size_t sum = total_average_fitness();
+
+  // Don't remove species if total fitness is 0 (would remove all)
+  if (sum == 0) return;
+
+  // Always keep at least one species
+  size_t min_species = 1;
+
   auto s = species.begin();
-  while (s != species.end()) {
+  while (s != species.end() && species.size() > min_species) {
     exfloat breed = std::floor(1. * s->average_fitness.load() / (1. * sum) * 1. *
                                speciating_parameters.population);
     if (breed >= 1.0f)
@@ -995,26 +1256,38 @@ ethreads::coro_task<void> pool::add_to_species_async(genome child) {
 // ============================================================================
 
 // rtNEAT: Adjust fitness with age penalties and bonuses
+// Based on rtNEAT species.cpp:696-741
 void pool::adjust_species_fitness(specie &s) {
   s.genomes.modify([&](std::vector<genome> &gs) {
+    // Calculate age_debt using rtNEAT formula
+    // age_debt = (age - age_of_last_improvement + 1) - dropoff_age
+    int64_t age_debt = static_cast<int64_t>(s.age) -
+                       static_cast<int64_t>(s.age_of_last_improvement) + 1 -
+                       static_cast<int64_t>(speciating_parameters.dropoff_age);
+
+    // rtNEAT: if age_debt == 0, set to 1 to ensure penalty is applied
+    if (age_debt == 0) age_debt = 1;
+
     for (auto &g : gs) {
       exfloat fitness = static_cast<exfloat>(g.fitness.load());
 
-      // Age penalty for stagnant species
-      if (s.age > speciating_parameters.dropoff_age) {
-        size_t age_debt = s.age - s.age_of_last_improvement;
-        if (age_debt >= speciating_parameters.dropoff_age) {
-          // Extreme penalty for very old species without improvement
-          fitness *= 0.01f;
-        }
+      // Remember original fitness (rtNEAT: org->orig_fitness = org->fitness)
+      g.orig_fitness = g.fitness.load();
+
+      // rtNEAT: Apply penalty if age_debt >= 1 OR obliterate is set
+      // This means species that haven't improved since dropoff_age get penalized
+      if (age_debt >= 1 || s.obliterate) {
+        // Extreme penalty for stagnation (divide fitness by 100)
+        fitness *= 0.01f;
       }
 
       // Age bonus for young species (first 10 generations)
+      // rtNEAT: age_significance multiplier (1.0 = no boost)
       if (s.age <= 10) {
         fitness *= speciating_parameters.age_significance;
       }
 
-      // Ensure fitness doesn't go negative
+      // Do not allow negative fitness
       if (fitness < 0.0001f) fitness = 0.0001f;
 
       // Fitness sharing: divide by species size
@@ -1174,16 +1447,35 @@ genome pool::breed_child_sync(specie &s) {
 
   // Access genomes via sync_shared_value to select parents
   bool should_return_early = false;
+  bool crossover_happened = false;
+
   s.genomes.modify([&](std::vector<genome> &g) {
     if (g.empty()) {
       should_return_early = true;
       return;
     }
     std::uniform_int_distribution<size_t> choose_genome(0, g.size() - 1);
+
     if (eneat::get_rand(distributor) < mutation_rates.crossover_chance) {
       genome g1 = g[eneat::get_rand(choose_genome)];
-      genome g2 = g[eneat::get_rand(choose_genome)];
+      genome g2;
+
+      // rtNEAT: Interspecies mating check
+      if (eneat::get_rand(distributor) < speciating_parameters.interspecies_mate_rate &&
+          species.size() > 1) {
+        // Mate with champion from random other species
+        specie* other = choose_random_species_excluding(s);
+        if (other) {
+          g2 = get_species_champion(*other);
+        } else {
+          g2 = g[eneat::get_rand(choose_genome)];
+        }
+      } else {
+        g2 = g[eneat::get_rand(choose_genome)];
+      }
+
       child = crossover(g1, g2);
+      crossover_happened = true;
     } else {
       child = g[eneat::get_rand(choose_genome)];
     }
@@ -1193,7 +1485,26 @@ genome pool::breed_child_sync(specie &s) {
     return child;
   }
 
-  mutate_sync(child);
+  // Track origin (for debugging/adaptive strategies)
+  child.mate_baby = crossover_happened;
+
+  // rtNEAT: Mate-only probability - skip mutation with mate_only_prob chance after crossover
+  bool should_mutate = true;
+  if (crossover_happened) {
+    std::uniform_real_distribution<exfloat> dist(0.0f, 1.0f);
+    if (eneat::get_rand(dist) < mutation_rates.mutate_only_prob) {
+      // Note: mutate_only_prob is inverted here - high value = more mutation skipping after mating
+      // This matches rtNEAT reference where mate_only_prob controls skipping mutation
+      should_mutate = false;
+    }
+  }
+
+  if (should_mutate) {
+    mutate_sync(child);
+    // Track if structural mutation happened
+    child.mut_struct_baby = (child.genes.size() > 0);  // Simplified check
+  }
+
   return child;
 }
 
@@ -1204,7 +1515,59 @@ genome pool::reproduce_one() {
     return genome(network_info, mutation_rates);
   }
 
-  genome child = breed_child_sync(*parent_species);
+  genome child(network_info, mutation_rates);
+
+  // rtNEAT: Champion preservation - clone champion once per generation if species has enough offspring
+  if (parent_species->expected_offspring.load() > 5 && !parent_species->champion_preserved) {
+    parent_species->champion_preserved = true;
+    child = get_species_champion(*parent_species);
+    child.fitness.store(0);
+    child.adjusted_fitness.store(0);
+    child.time_alive.store(0);
+    child.mate_baby = false;
+    child.mut_struct_baby = false;
+    // Champion clone - no mutation
+    return child;
+  }
+
+  // rtNEAT: Super champion offspring handling
+  // Check if parent species has a super champion with reserved offspring
+  auto genomes_copy = parent_species->genomes.load();
+  for (auto& g : genomes_copy) {
+    if (g.super_champ_offspring > 0) {
+      // Clone the super champion
+      child = g;
+      child.fitness.store(0);
+      child.adjusted_fitness.store(0);
+      child.time_alive.store(0);
+      child.mate_baby = false;
+
+      // Decrement super_champ_offspring (need to modify the original)
+      parent_species->genomes.modify([&](std::vector<genome>& gs) {
+        for (auto& genome_ref : gs) {
+          if (genome_ref.pop_champ && genome_ref.super_champ_offspring > 0) {
+            genome_ref.super_champ_offspring--;
+            break;
+          }
+        }
+      });
+
+      // 80% chance: weight mutations only, 20%: full mutation
+      std::uniform_real_distribution<exfloat> dist(0.0f, 1.0f);
+      if (eneat::get_rand(dist) < 0.8f) {
+        // Weight mutation only (with severe mode and position-based power)
+        mutate_weight_only(child);
+        child.mut_struct_baby = false;
+      } else {
+        mutate_sync(child);
+        child.mut_struct_baby = true;
+      }
+      return child;
+    }
+  }
+
+  // Normal breeding
+  child = breed_child_sync(*parent_species);
   child.time_alive.store(0);
   return child;
 }
@@ -1253,6 +1616,79 @@ bool pool::remove_worst() {
   return false;
 }
 
+// rtNEAT: Probabilistic worst removal - fitness-proportional selection for removal
+// Reference: population.cpp probabilistic removal variant
+// Lower fitness = higher probability of being selected for removal
+bool pool::remove_worst_probabilistic() {
+  // Collect all eligible organisms with their locations and inverse fitness weights
+  struct candidate {
+    size_t species_idx;
+    size_t genome_idx;
+    exfloat inverse_fitness;  // Higher = more likely to be removed
+  };
+  std::vector<candidate> candidates;
+  exfloat total_inverse = 0.0f;
+
+  size_t species_idx = 0;
+  for (auto &s : species) {
+    auto genomes_copy = s.genomes.load();
+    for (size_t i = 0; i < genomes_copy.size(); i++) {
+      const auto &g = genomes_copy[i];
+      if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
+        size_t adj = g.adjusted_fitness.load();
+        // Inverse fitness: lower fitness = higher weight for removal
+        // Add 1 to avoid division by zero
+        exfloat inv = 1.0f / (static_cast<exfloat>(adj) + 1.0f);
+        candidates.push_back({species_idx, i, inv});
+        total_inverse += inv;
+      }
+    }
+    species_idx++;
+  }
+
+  if (candidates.empty() || total_inverse <= 0.0f) {
+    return false;
+  }
+
+  // Weighted random selection
+  std::uniform_real_distribution<exfloat> dist(0.0f, total_inverse);
+  exfloat selection = eneat::get_rand(dist);
+
+  exfloat cumulative = 0.0f;
+  size_t selected_species_idx = candidates[0].species_idx;
+  size_t selected_genome_idx = candidates[0].genome_idx;
+
+  for (const auto &c : candidates) {
+    cumulative += c.inverse_fitness;
+    if (cumulative >= selection) {
+      selected_species_idx = c.species_idx;
+      selected_genome_idx = c.genome_idx;
+      break;
+    }
+  }
+
+  // Remove the selected organism
+  auto it = species.begin();
+  std::advance(it, selected_species_idx);
+
+  if (it != species.end()) {
+    it->genomes.modify([selected_genome_idx](std::vector<genome> &gs) {
+      if (selected_genome_idx < gs.size()) {
+        gs.erase(gs.begin() + static_cast<std::ptrdiff_t>(selected_genome_idx));
+      }
+    });
+
+    // Remove empty species
+    species.remove_if([](const specie &s) {
+      return s.genomes.load().empty();
+    });
+
+    return true;
+  }
+
+  return false;
+}
+
 // rtNEAT: Trait mutation - perturb random trait's parameters
 ethreads::coro_task<void> pool::mutate_random_trait(genome &g) {
   if (g.traits.empty()) co_return;
@@ -1281,7 +1717,445 @@ ethreads::coro_task<void> pool::mutate_link_trait(genome &g) {
 
   it->second.trait_id = eneat::get_rand(trait_dist);
 
+  // rtNEAT: Update mutation_num for speciation distance calculation
+  it->second.mutation_num += 1.0f;
+
   co_return;
+}
+
+// rtNEAT: Mutate node trait - assign a random trait to a random node
+ethreads::coro_task<void> pool::mutate_node_trait(genome &g) {
+  if (g.traits.empty()) co_return;
+
+  // Collect all unique node IDs from genes
+  std::set<size_t> nodes;
+  for (const auto& [_, gene] : g.genes) {
+    nodes.insert(gene.from_node);
+    nodes.insert(gene.to_node);
+  }
+
+  if (nodes.empty()) co_return;
+
+  // Choose a random node
+  std::uniform_int_distribution<size_t> node_dist(0, nodes.size() - 1);
+  size_t node_idx = eneat::get_rand(node_dist);
+  auto node_it = nodes.begin();
+  std::advance(node_it, node_idx);
+  size_t node_id = *node_it;
+
+  // Check if node is frozen
+  if (g.frozen_nodes.count(node_id) > 0) co_return;
+
+  // Assign a random trait to this node (1-indexed, or 0 for no trait)
+  std::uniform_int_distribution<size_t> trait_dist(0, g.traits.size());
+  g.node_traits[node_id] = eneat::get_rand(trait_dist);
+
+  co_return;
+}
+
+// rtNEAT: Check for population stagnation and trigger delta-coding if needed
+void pool::check_delta_coding() {
+  if (!speciating_parameters.delta_coding_enabled) return;
+
+  size_t current_best = max_fitness.load();
+
+  if (current_best > highest_fitness_ever) {
+    highest_fitness_ever = current_best;
+    generations_since_improvement = 0;
+  } else {
+    generations_since_improvement++;
+  }
+
+  // Trigger delta-coding if stagnated for dropoff_age + 5 generations
+  if (generations_since_improvement >= speciating_parameters.dropoff_age + 5) {
+    apply_delta_coding();
+    generations_since_improvement = 0;
+  }
+}
+
+// rtNEAT: Apply delta-coding - replace population with mutated clones of top 2 organisms
+void pool::apply_delta_coding() {
+  if (species.empty()) return;
+
+  // Find top 2 organisms across all species
+  // Store copies directly to avoid dangling pointers
+  std::optional<genome> best_copy;
+  std::optional<genome> second_copy;
+  size_t best_fitness = 0;
+  size_t second_fitness = 0;
+
+  for (auto& s : species) {
+    auto genomes_copy = s.genomes.load();
+    for (const auto& g : genomes_copy) {
+      size_t f = g.fitness.load();
+      if (f > best_fitness) {
+        second_copy = best_copy;
+        second_fitness = best_fitness;
+        best_copy = g;
+        best_fitness = f;
+      } else if (f > second_fitness) {
+        second_copy = g;
+        second_fitness = f;
+      }
+    }
+  }
+
+  if (!best_copy) return;
+
+  // Use second_copy if available, otherwise use best_copy
+  genome second = second_copy ? *second_copy : *best_copy;
+
+  // Clear all species
+  species.clear();
+
+  // Create half population from best, half from second best
+  size_t half_pop = speciating_parameters.population / 2;
+  size_t total = speciating_parameters.population;
+
+  for (size_t i = 0; i < half_pop; i++) {
+    genome child = *best_copy;
+    child.fitness.store(0);
+    child.adjusted_fitness.store(0);
+    child.time_alive.store(0);
+    mutate_sync(child);
+    add_to_species(child);
+  }
+
+  for (size_t i = half_pop; i < total; i++) {
+    genome child = second;
+    child.fitness.store(0);
+    child.adjusted_fitness.store(0);
+    child.time_alive.store(0);
+    mutate_sync(child);
+    add_to_species(child);
+  }
+}
+
+// rtNEAT: Redistribute offspring from weak species to strong species
+void pool::redistribute_offspring() {
+  if (speciating_parameters.babies_stolen == 0) return;
+  if (species.size() < 4) return;  // Need at least 4 species for meaningful redistribution
+
+  // Sort species by average fitness (descending)
+  std::vector<specie*> sorted_species;
+  for (auto& s : species) {
+    sorted_species.push_back(&s);
+  }
+
+  std::sort(sorted_species.begin(), sorted_species.end(),
+    [](const specie* a, const specie* b) {
+      return a->average_est.load() > b->average_est.load();
+    });
+
+  // Steal from weak species (bottom, age > 5, expected_offspring > 2)
+  size_t stolen = 0;
+  size_t target = speciating_parameters.babies_stolen;
+
+  for (auto it = sorted_species.rbegin();
+       it != sorted_species.rend() && stolen < target; ++it) {
+    specie* s = *it;
+    if (s->age > 5) {
+      size_t available = s->expected_offspring.load();
+      if (available > 2) {
+        size_t to_steal = std::min(available - 1, target - stolen);
+        s->expected_offspring.store(available - to_steal);
+        stolen += to_steal;
+      }
+    }
+  }
+
+  if (stolen == 0) return;
+
+  // Give stolen babies to top 3 species (proportionally: 2/5, 2/5, 1/5)
+  size_t top3_count = std::min((size_t)3, sorted_species.size());
+  if (top3_count >= 1) {
+    size_t current = sorted_species[0]->expected_offspring.load();
+    sorted_species[0]->expected_offspring.store(current + (stolen * 2) / 5);
+  }
+  if (top3_count >= 2) {
+    size_t current = sorted_species[1]->expected_offspring.load();
+    sorted_species[1]->expected_offspring.store(current + (stolen * 2) / 5);
+  }
+  if (top3_count >= 3) {
+    size_t current = sorted_species[2]->expected_offspring.load();
+    sorted_species[2]->expected_offspring.store(current + stolen - (stolen * 4) / 5);
+  }
+}
+
+// rtNEAT: Adjust compatibility threshold to maintain target species count
+void pool::adjust_compatibility_threshold() {
+  if (!speciating_parameters.dynamic_threshold_enabled) return;
+
+  offspring_since_compat_adjust++;
+
+  if (offspring_since_compat_adjust >= speciating_parameters.compat_adjust_frequency) {
+    offspring_since_compat_adjust = 0;
+
+    size_t num_species = species.size();
+
+    if (num_species < speciating_parameters.target_species_count) {
+      // Too few species - decrease threshold to split species
+      speciating_parameters.delta_threshold -=
+          speciating_parameters.compat_threshold_delta;
+    } else if (num_species > speciating_parameters.target_species_count) {
+      // Too many species - increase threshold to merge species
+      speciating_parameters.delta_threshold +=
+          speciating_parameters.compat_threshold_delta;
+    }
+
+    // Enforce minimum threshold
+    if (speciating_parameters.delta_threshold <
+        speciating_parameters.compat_threshold_min) {
+      speciating_parameters.delta_threshold =
+          speciating_parameters.compat_threshold_min;
+    }
+
+    // Reassign all organisms to species with new threshold
+    reassign_all_species();
+  }
+}
+
+// rtNEAT: Reassign all organisms to species based on current threshold
+// Reference: population.cpp - preserves species representatives for continuity
+void pool::reassign_all_species() {
+  // Collect all non-representative genomes for reassignment
+  std::vector<genome> genomes_to_reassign;
+
+  for (auto& s : species) {
+    auto genomes_copy = s.genomes.load();
+    // Keep first genome as representative, collect rest for reassignment
+    for (size_t i = 1; i < genomes_copy.size(); i++) {
+      genomes_to_reassign.push_back(genomes_copy[i]);
+    }
+    // Clear species to just the representative
+    s.genomes.modify([](std::vector<genome>& gs) {
+      if (gs.size() > 1) {
+        gs.erase(gs.begin() + 1, gs.end());
+      }
+    });
+  }
+
+  // Re-add all non-representative genomes (they match against existing species
+  // representatives based on new threshold, or form new species)
+  for (auto& g : genomes_to_reassign) {
+    add_to_species(g);
+  }
+
+  // Remove any species that became empty (shouldn't happen but safety check)
+  species.remove_if([](const specie& s) {
+    return s.genomes.load().empty();
+  });
+}
+
+// rtNEAT: Calculate expected offspring for each species proportionally
+void pool::calculate_expected_offspring() {
+  // First pass: calculate total adjusted fitness (using average_est)
+  size_t total_avg = 0;
+  for (auto& s : species) {
+    total_avg += s.average_est.load();
+  }
+
+  if (total_avg == 0) {
+    // If no fitness yet, distribute evenly
+    size_t per_species = speciating_parameters.population / species.size();
+    for (auto& s : species) {
+      s.expected_offspring.store(per_species);
+    }
+    return;
+  }
+
+  // Second pass: assign expected offspring proportionally
+  size_t total_assigned = 0;
+  for (auto& s : species) {
+    size_t expected = (s.average_est.load() * speciating_parameters.population) / total_avg;
+    s.expected_offspring.store(expected);
+    total_assigned += expected;
+  }
+
+  // Assign remainder to best species (due to integer division rounding)
+  if (total_assigned < speciating_parameters.population && !species.empty()) {
+    size_t best_avg = 0;
+    specie* best_species = nullptr;
+    for (auto& s : species) {
+      if (s.average_est.load() > best_avg) {
+        best_avg = s.average_est.load();
+        best_species = &s;
+      }
+    }
+    if (best_species) {
+      best_species->expected_offspring.store(
+          best_species->expected_offspring.load() +
+          (speciating_parameters.population - total_assigned));
+    }
+  }
+}
+
+// rtNEAT: Reset champion_preserved flags for new generation
+void pool::reset_champion_flags() {
+  for (auto& s : species) {
+    s.champion_preserved = false;
+  }
+}
+
+// rtNEAT: Choose a random species excluding the given one (for interspecies mating)
+specie* pool::choose_random_species_excluding(const specie& exclude) {
+  if (species.size() <= 1) return nullptr;
+
+  // Collect candidates with their fitness
+  std::vector<std::pair<specie*, size_t>> candidates;
+  for (auto& s : species) {
+    if (&s != &exclude) {
+      candidates.push_back({&s, s.average_est.load()});
+    }
+  }
+
+  if (candidates.empty()) return nullptr;
+
+  // rtNEAT: Sort by fitness (descending) for Gaussian-weighted selection
+  std::sort(candidates.begin(), candidates.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; });
+
+  // Gaussian-weighted selection: bias towards better species
+  // Use absolute value of Gaussian to get index (lower = better)
+  std::normal_distribution<double> gauss(0.0, 1.0);
+  double rand_val = std::abs(eneat::get_rand(gauss));
+
+  // Map Gaussian value to index (clamp to valid range)
+  // Higher Gaussian values = higher indices (worse species)
+  size_t index = static_cast<size_t>(rand_val * candidates.size() / 3.0);
+  if (index >= candidates.size()) {
+    index = candidates.size() - 1;
+  }
+
+  return candidates[index].first;
+}
+
+// rtNEAT: Get the champion (best fitness) genome from a species
+genome pool::get_species_champion(const specie& s) {
+  auto genomes_copy = s.genomes.load();
+  if (genomes_copy.empty()) {
+    return genome(network_info, mutation_rates);  // Return empty genome
+  }
+
+  std::optional<genome> best;
+  size_t best_fitness = 0;
+
+  for (const auto& g : genomes_copy) {
+    if (g.fitness.load() >= best_fitness) {
+      best_fitness = g.fitness.load();
+      best = g;
+    }
+  }
+
+  return best ? *best : genomes_copy[0];
+}
+
+// rtNEAT: Calculate network depth (max path length from inputs to outputs)
+// Useful for complexity tracking and determining network structure
+size_t pool::calculate_network_depth(const genome& g) {
+  if (g.genes.empty()) return 0;
+
+  // Build adjacency list (from_node -> to_node connections)
+  std::unordered_map<size_t, std::vector<size_t>> adj;
+  std::unordered_set<size_t> all_nodes;
+
+  for (const auto& [_, gene] : g.genes) {
+    if (gene.enabled) {
+      adj[gene.from_node].push_back(gene.to_node);
+      all_nodes.insert(gene.from_node);
+      all_nodes.insert(gene.to_node);
+    }
+  }
+
+  if (all_nodes.empty()) return 0;
+
+  // BFS from each input node to find max depth
+  size_t max_depth = 0;
+  size_t input_end = g.network_info.input_size + g.network_info.bias_size;
+
+  for (size_t input_node = 0; input_node < input_end; input_node++) {
+    if (adj.find(input_node) == adj.end()) continue;
+
+    // BFS with depth tracking
+    std::queue<std::pair<size_t, size_t>> q;  // (node, depth)
+    std::unordered_set<size_t> visited;
+
+    q.push({input_node, 0});
+    visited.insert(input_node);
+
+    while (!q.empty()) {
+      auto [node, depth] = q.front();
+      q.pop();
+
+      max_depth = std::max(max_depth, depth);
+
+      // Limit depth to prevent infinite loops in recurrent networks
+      if (depth > 100) continue;
+
+      for (size_t next : adj[node]) {
+        if (visited.find(next) == visited.end()) {
+          visited.insert(next);
+          q.push({next, depth + 1});
+        }
+      }
+    }
+  }
+
+  return max_depth;
+}
+
+// rtNEAT: Verify genome integrity (debug/validation)
+bool pool::verify_genome(const genome& g) const {
+  // Check for valid network_info
+  if (g.network_info.input_size == 0 || g.network_info.output_size == 0) {
+    return false;
+  }
+
+  // Check all genes have valid node references
+  for (const auto& [innovation, gene] : g.genes) {
+    // from_node should be less than max_neuron
+    if (gene.from_node >= g.max_neuron) {
+      return false;
+    }
+    // to_node should be less than max_neuron
+    if (gene.to_node >= g.max_neuron) {
+      return false;
+    }
+    // to_node shouldn't be an input node
+    if (gene.to_node < g.network_info.input_size + g.network_info.bias_size) {
+      // Unless it's a bias node connecting to itself (shouldn't happen)
+      return false;
+    }
+    // Weight should be reasonable (not NaN or infinite)
+    if (std::isnan(gene.weight) || std::isinf(gene.weight)) {
+      return false;
+    }
+    // mutation_num should be non-negative
+    if (gene.mutation_num < 0.0f) {
+      return false;
+    }
+  }
+
+  // Check trait references are valid
+  for (const auto& [innovation, gene] : g.genes) {
+    if (gene.trait_id > g.traits.size()) {
+      return false;  // Invalid trait reference
+    }
+  }
+
+  // Check node trait references are valid
+  for (const auto& [node_id, trait_id] : g.node_traits) {
+    if (trait_id > g.traits.size()) {
+      return false;  // Invalid trait reference
+    }
+  }
+
+  // Check max_neuron is at least functional_neurons
+  if (g.max_neuron < g.network_info.functional_neurons) {
+    return false;
+  }
+
+  return true;
 }
 
 std::istream &operator>>(std::istream &input, pool &p) {

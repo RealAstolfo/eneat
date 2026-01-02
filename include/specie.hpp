@@ -29,6 +29,12 @@ struct specie {
   // Flag for newly created species (protects from aging in first gen)
   bool novel = true;
 
+  // Champion preservation flag (rtNEAT: clone champion once per generation)
+  bool champion_preserved = false;
+
+  // Obliterate flag (rtNEAT: force extreme fitness penalty on stagnant species)
+  bool obliterate = false;
+
   specie() = default;
 
   specie(size_t species_id) : id(species_id) {}
@@ -44,7 +50,9 @@ struct specie {
         average_est(other.average_est.load()),
         expected_offspring(other.expected_offspring.load()),
         genomes(other.genomes.load()),
-        novel(other.novel) {}
+        novel(other.novel),
+        champion_preserved(other.champion_preserved),
+        obliterate(other.obliterate) {}
 
   // Copy assignment
   specie &operator=(const specie &other) {
@@ -60,6 +68,8 @@ struct specie {
       expected_offspring.store(other.expected_offspring.load());
       genomes.store(other.genomes.load());
       novel = other.novel;
+      champion_preserved = other.champion_preserved;
+      obliterate = other.obliterate;
     }
     return *this;
   }
@@ -75,7 +85,9 @@ struct specie {
         average_est(other.average_est.load()),
         expected_offspring(other.expected_offspring.load()),
         genomes(other.genomes.load()),
-        novel(other.novel) {}
+        novel(other.novel),
+        champion_preserved(other.champion_preserved),
+        obliterate(other.obliterate) {}
 
   // Move assignment
   specie &operator=(specie &&other) noexcept {
@@ -91,6 +103,8 @@ struct specie {
       expected_offspring.store(other.expected_offspring.load());
       genomes.store(other.genomes.load());
       novel = other.novel;
+      champion_preserved = other.champion_preserved;
+      obliterate = other.obliterate;
     }
     return *this;
   }

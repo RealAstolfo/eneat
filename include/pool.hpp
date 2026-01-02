@@ -101,9 +101,18 @@ struct pool {
   // Trait mutations (Hebbian learning)
   ethreads::coro_task<void> mutate_random_trait(genome &g);
   ethreads::coro_task<void> mutate_link_trait(genome &g);
+  ethreads::coro_task<void> mutate_node_trait(genome &g);
 
   // Synchronous mutation for initialization
   void mutate_sync(genome &g);
+
+  // Weight-only mutation (for super champion offspring - 80% weight only, 20% structural)
+  void mutate_weight_only(genome &g);
+
+  // rtNEAT: Add sensor mutation - connects unconnected input sensors to outputs
+  // Reference: genome.cpp:1804 (mutate_add_sensor)
+  ethreads::coro_task<void> mutate_add_sensor(genome &g);
+  void mutate_add_sensor_sync(genome &g);
 
   // Species management
   void add_to_species(const genome &child);
@@ -129,10 +138,41 @@ struct pool {
   // Synchronous versions (avoid coroutine scheduling overhead)
   genome reproduce_one();
   bool remove_worst();
+  bool remove_worst_probabilistic();  // Fitness-proportional probabilistic removal
   genome breed_child_sync(specie &s);
 
   // Initialize species channel (call before async operations)
   void init_species_channel();
+
+  // rtNEAT reference features
+
+  // Delta-coding: emergency diversity injection when population stagnates
+  size_t highest_fitness_ever = 0;
+  size_t generations_since_improvement = 0;
+  void check_delta_coding();
+  void apply_delta_coding();
+
+  // Babies stolen: offspring redistribution from weak to strong species
+  void redistribute_offspring();
+
+  // Dynamic compatibility threshold: auto-adjust to maintain target species count
+  size_t offspring_since_compat_adjust = 0;
+  void adjust_compatibility_threshold();
+  void reassign_all_species();
+
+  // Expected offspring calculation (proportional to species fitness)
+  void calculate_expected_offspring();
+  void reset_champion_flags();  // Reset champion_preserved flags for new generation
+
+  // Interspecies mating helpers
+  specie* choose_random_species_excluding(const specie& exclude);
+  genome get_species_champion(const specie& s);
+
+  // Network complexity analysis
+  size_t calculate_network_depth(const genome& g);
+
+  // Genome verification (debug/validation)
+  bool verify_genome(const genome& g) const;
 };
 
 std::istream &operator>>(std::istream &input, pool &p);

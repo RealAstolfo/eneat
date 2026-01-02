@@ -42,6 +42,7 @@ std::istream &operator>>(std::istream &input, brain &b) {
     size_t input_size;
     b.neurons[i].value = 0.0f;
     b.neurons[i].last_activation = 0.0f;
+    b.neurons[i].last_activation2 = 0.0f;
     b.neurons[i].visited = false;
     input >> tmp_type;
     type = (neuron_place)tmp_type;
@@ -70,8 +71,9 @@ std::istream &operator>>(std::istream &input, brain &b) {
       exfloat w;
       size_t tid;
       bool rec;
-      input >> from >> w >> tid >> rec;
-      b.neurons[i].in_connections.emplace_back(from, w, tid, rec);
+      bool td;
+      input >> from >> w >> tid >> rec >> td;
+      b.neurons[i].in_connections.emplace_back(from, w, tid, rec, td);
     }
   }
   return input;
@@ -96,7 +98,8 @@ std::ostream &operator<<(std::ostream &output, brain &b) {
     for (size_t j = 0; j < b.neurons[i].in_connections.size(); j++) {
       const auto& conn = b.neurons[i].in_connections[j];
       output << conn.from_neuron << " " << conn.weight << " "
-             << conn.trait_id << " " << conn.is_recurrent << " ";
+             << conn.trait_id << " " << conn.is_recurrent << " "
+             << conn.is_time_delayed << " ";
     }
     output << std::endl << std::endl;
   }
@@ -183,16 +186,40 @@ void brain::operator=(const genome &g) {
     }
   }
 
-  // Add connections with trait information
+  // Add connections with trait information and derive trait params
   for (auto it = g.genes.begin(); it != g.genes.end(); it++) {
     if (!it->second.enabled)
       continue;
-    neurons[table[it->second.to_node]].in_connections.emplace_back(
+
+    neuron_connection conn(
         table[it->second.from_node],
         it->second.weight,
         it->second.trait_id,
-        it->second.is_recurrent
+        it->second.is_recurrent,
+        it->second.is_time_delayed
     );
+
+    // Derive trait parameters for the connection
+    if (it->second.trait_id > 0 && it->second.trait_id <= g.traits.size()) {
+      const auto& trait = g.traits[it->second.trait_id - 1];
+      for (size_t p = 0; p < neuron_connection::NUM_TRAIT_PARAMS && p < eneat::NUM_TRAIT_PARAMS; p++) {
+        conn.params[p] = trait.params[p];
+      }
+    }
+
+    neurons[table[it->second.to_node]].in_connections.push_back(conn);
+  }
+
+  // Derive trait parameters for neurons (node traits)
+  for (const auto& [node_id, trait_id] : g.node_traits) {
+    if (table.find(node_id) != table.end() && trait_id > 0 && trait_id <= g.traits.size()) {
+      size_t neuron_idx = table[node_id];
+      neurons[neuron_idx].trait_id = trait_id;
+      const auto& trait = g.traits[trait_id - 1];
+      for (size_t p = 0; p < neuron::NUM_TRAIT_PARAMS && p < eneat::NUM_TRAIT_PARAMS; p++) {
+        neurons[neuron_idx].params[p] = trait.params[p];
+      }
+    }
   }
 }
 
@@ -276,8 +303,9 @@ void brain::evaluate_nonrecurrent(const std::vector<exfloat> &input,
 
 void brain::evaluate_recurrent(const std::vector<exfloat> &input,
                                std::vector<exfloat> &output) {
-  // Store last activations for Hebbian learning
+  // Shift activation history: last_activation2 = last_activation, last_activation = current
   for (size_t i = 0; i < neurons.size(); i++) {
+    neurons[i].last_activation2 = neurons[i].last_activation;
     neurons[i].last_activation = neurons[i].value;
   }
 
@@ -293,9 +321,24 @@ void brain::evaluate_recurrent(const std::vector<exfloat> &input,
 
   for (size_t i = 0; i < neurons.size(); i++) {
     exfloat sum = 0.0f;
-    for (size_t j = 0; j < neurons[i].in_connections.size(); j++)
-      sum += neurons[neurons[i].in_connections[j].from_neuron].value *
-             neurons[i].in_connections[j].weight;
+    for (size_t j = 0; j < neurons[i].in_connections.size(); j++) {
+      const auto& conn = neurons[i].in_connections[j];
+      exfloat input_activation;
+
+      // Time-delayed connections use last_activation (t-1 for normal, t-2 for time-delayed)
+      // rtNEAT's get_active_out_td() returns last_activation if activation_count > 1
+      if (conn.is_time_delayed) {
+        // Time-delayed: use activation from two timesteps ago
+        input_activation = (neurons[conn.from_neuron].activation_count > 1)
+            ? neurons[conn.from_neuron].last_activation
+            : 0.0f;
+      } else {
+        // Normal connection: use current value
+        input_activation = neurons[conn.from_neuron].value;
+      }
+
+      sum += input_activation * conn.weight;
+    }
     if (neurons[i].in_connections.size() > 0) {
       switch (neurons[i].activation_function) {
       case RELU:
@@ -342,9 +385,88 @@ void brain::evaluate_recurrent(const std::vector<exfloat> &input,
     output[i] = neurons[output_neurons[i]].value;
 }
 
-// Hebbian learning: modify weights based on pre/post synaptic activations
-// Formula: delta_w = A*pre*post + B*pre + C*post + D
-// Where A,B,C,D come from the trait parameters
+// rtNEAT oldhebbian algorithm
+// Based on rtNEAT neat.cpp:463
+exfloat brain::oldhebbian(exfloat weight, exfloat maxweight, exfloat active_in,
+                          exfloat active_out, exfloat hebb_rate,
+                          exfloat pre_rate, exfloat post_rate) {
+  bool neg = false;
+  exfloat delta;
+
+  if (maxweight < 5.0f) maxweight = 5.0f;
+  if (weight > maxweight) weight = maxweight;
+  if (weight < -maxweight) weight = -maxweight;
+
+  if (weight < 0) {
+    neg = true;
+    weight = -weight;
+  }
+
+  if (!neg) {
+    // Excitatory synapse
+    delta = hebb_rate * (maxweight - weight) * active_in * active_out +
+            pre_rate * weight * active_in * (active_out - 1.0f) +
+            post_rate * weight * (active_in - 1.0f) * active_out;
+
+    if (weight + delta > 0)
+      return weight + delta;
+    return 0.01f;
+  } else {
+    // Inhibitory synapse: strengthen when output is low and input is high
+    delta = hebb_rate * (maxweight - weight) * active_in * (1.0f - active_out) +
+            -5.0f * hebb_rate * weight * active_in * active_out;
+
+    if (-(weight + delta) < 0)
+      return -(weight + delta);
+    return -0.01f;
+  }
+}
+
+// rtNEAT hebbian algorithm (Floreano & Urzelai 2000)
+// Based on rtNEAT neat.cpp:534
+exfloat brain::hebbian(exfloat weight, exfloat maxweight, exfloat active_in,
+                       exfloat active_out, exfloat hebb_rate,
+                       exfloat pre_rate, exfloat post_rate) {
+  (void)post_rate;  // Not used in this variant (matches rtNEAT reference)
+
+  bool neg = false;
+  exfloat delta;
+  exfloat topweight;
+
+  if (maxweight < 5.0f) maxweight = 5.0f;
+  if (weight > maxweight) weight = maxweight;
+  if (weight < -maxweight) weight = -maxweight;
+
+  if (weight < 0) {
+    neg = true;
+    weight = -weight;
+  }
+
+  topweight = weight + 2.0f;
+  if (topweight > maxweight) topweight = maxweight;
+
+  if (!neg) {
+    // Excitatory synapse
+    delta = hebb_rate * (maxweight - weight) * active_in * active_out +
+            pre_rate * topweight * active_in * (active_out - 1.0f);
+
+    return weight + delta;
+  } else {
+    // Inhibitory synapse
+    delta = pre_rate * (maxweight - weight) * active_in * (1.0f - active_out) +
+            -hebb_rate * (topweight + 2.0f) * active_in * active_out;
+
+    return -(weight + delta);
+  }
+}
+
+// Apply Hebbian learning using rtNEAT algorithms
+// Trait params:
+// params[0] = Hebbian learning rate (hebb_rate)
+// params[1] = Presynaptic learning rate (pre_rate)
+// params[2] = Postsynaptic learning rate (post_rate)
+// params[3] = Max weight limit (maxweight)
+// params[4] = Learning algorithm: 0 = hebbian, 1 = oldhebbian
 void brain::apply_hebbian_learning() {
   for (size_t i = 0; i < neurons.size(); i++) {
     exfloat post_activation = neurons[i].value;
@@ -364,30 +486,20 @@ void brain::apply_hebbian_learning() {
 
       exfloat pre_activation = neurons[conn.from_neuron].last_activation;
 
-      // Hebbian learning rule:
-      // params[0] = Hebbian coefficient (pre * post)
-      // params[1] = Presynaptic coefficient (pre only)
-      // params[2] = Postsynaptic coefficient (post only)
-      // params[3] = Bias/decay term
-      // params[4] = Learning rate
-      // params[5] = Weight limit (max absolute value)
+      // Get learning parameters from trait
+      exfloat hebb_rate = t.params[0];
+      exfloat pre_rate = t.params[1];
+      exfloat post_rate = t.params[2];
+      exfloat maxweight = t.params[3];
+      bool use_oldhebbian = (t.params[4] > 0.5f);
 
-      exfloat delta_w = t.params[0] * pre_activation * post_activation +
-                        t.params[1] * pre_activation +
-                        t.params[2] * post_activation +
-                        t.params[3];
-
-      // Apply learning rate
-      delta_w *= t.params[4];
-
-      // Update weight
-      conn.weight += delta_w;
-
-      // Clamp weight to limit
-      exfloat limit = std::abs(t.params[5]);
-      if (limit > 0.0f) {
-        if (conn.weight > limit) conn.weight = limit;
-        if (conn.weight < -limit) conn.weight = -limit;
+      // Apply the appropriate Hebbian learning algorithm
+      if (use_oldhebbian) {
+        conn.weight = oldhebbian(conn.weight, maxweight, pre_activation,
+                                 post_activation, hebb_rate, pre_rate, post_rate);
+      } else {
+        conn.weight = hebbian(conn.weight, maxweight, pre_activation,
+                              post_activation, hebb_rate, pre_rate, post_rate);
       }
     }
   }
@@ -398,7 +510,94 @@ void brain::reset_state() {
   for (size_t i = 0; i < neurons.size(); i++) {
     neurons[i].value = 0.0f;
     neurons[i].last_activation = 0.0f;
+    neurons[i].last_activation2 = 0.0f;
     neurons[i].activation_count = 0.0f;
     neurons[i].visited = false;
+    neurons[i].clear_override();
+
+    // Reset link added_weight (for future learning params)
+    for (auto& conn : neurons[i].in_connections) {
+      conn.added_weight = 0.0f;
+    }
   }
+}
+
+// rtNEAT: Flush network - reset all activations
+// Reference: network.cpp flush methods
+void brain::flush() {
+  for (size_t i = 0; i < neurons.size(); i++) {
+    neurons[i].value = 0.0f;
+    neurons[i].last_activation = 0.0f;
+    neurons[i].last_activation2 = 0.0f;
+    neurons[i].activation_count = 0.0f;
+    neurons[i].visited = false;
+    // Note: Don't clear overrides - they may be intentionally set
+  }
+}
+
+// rtNEAT: Recursive flushback from a specific neuron
+// Reference: nnode.cpp:206-235
+void brain::flushback(size_t neuron_idx) {
+  if (neuron_idx >= neurons.size()) return;
+
+  auto& n = neurons[neuron_idx];
+
+  // Sensors should not flush back
+  if (n.type == INPUT || n.type == BIAS) {
+    n.activation_count = 0.0f;
+    n.value = 0.0f;
+    n.last_activation = 0.0f;
+    n.last_activation2 = 0.0f;
+    return;
+  }
+
+  if (n.activation_count > 0) {
+    n.activation_count = 0.0f;
+    n.value = 0.0f;
+    n.last_activation = 0.0f;
+    n.last_activation2 = 0.0f;
+
+    // Flush back recursively through incoming connections
+    for (auto& conn : n.in_connections) {
+      conn.added_weight = 0.0f;
+      if (neurons[conn.from_neuron].activation_count > 0) {
+        flushback(conn.from_neuron);
+      }
+    }
+  }
+}
+
+// Load input values using sensor_load (proper time-delay shifting)
+void brain::load_sensors(const std::vector<exfloat> &input) {
+  for (size_t i = 0; i < input.size() && i < input_neurons.size(); i++) {
+    neurons[input_neurons[i]].sensor_load(input[i]);
+  }
+  // Also set bias neurons
+  for (size_t i = 0; i < bias_neurons.size(); i++) {
+    neurons[bias_neurons[i]].sensor_load(1.0f);
+  }
+}
+
+// Override specific output neurons
+void brain::override_outputs(const std::vector<exfloat> &values) {
+  for (size_t i = 0; i < values.size() && i < output_neurons.size(); i++) {
+    neurons[output_neurons[i]].override_output(values[i]);
+  }
+}
+
+// Clear all overrides
+void brain::clear_overrides() {
+  for (auto& n : neurons) {
+    n.clear_override();
+  }
+}
+
+// Check if network has finished activating (all outputs have values)
+bool brain::outputs_ready() const {
+  for (size_t i = 0; i < output_neurons.size(); i++) {
+    if (neurons[output_neurons[i]].activation_count == 0) {
+      return false;
+    }
+  }
+  return true;
 }

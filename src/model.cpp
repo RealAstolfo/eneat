@@ -113,9 +113,28 @@ ethreads::coro_task<void> model::tick_async() {
 
   eval_index_ = (eval_index_ + batch) % pop_size;
 
-  // Update running averages periodically
+  // === rtNEAT FEATURE INTEGRATION ===
+  // Update running averages and perform rtNEAT operations periodically
   if (tick_count.load() % 10 == 0) {
     p->estimate_all_averages();
+
+    // Calculate adjusted fitness for all organisms (CRITICAL - enables proper selection)
+    // Without this, remove_worst() selects randomly since adjusted_fitness would be 0
+    for (auto& s : p->species) {
+      p->adjust_species_fitness(s);
+    }
+
+    // Calculate expected offspring proportionally based on species fitness
+    p->calculate_expected_offspring();
+
+    // Redistribute offspring from weak to strong species (babies stolen)
+    p->redistribute_offspring();
+
+    // Check for population stagnation and apply delta-coding if needed
+    p->check_delta_coding();
+
+    // Adjust compatibility threshold to maintain target species count
+    p->adjust_compatibility_threshold();
   }
 
   // Population management: handle replacement (sync to avoid scheduler overhead)
@@ -136,6 +155,26 @@ ethreads::coro_task<void> model::tick_async() {
     // Population below target - just add offspring without removing
     genome child = p->reproduce_one();
     p->add_to_species(std::move(child));
+  }
+
+  // Per-generation operations (once per population_size ticks)
+  // A "generation" in rtNEAT is approximately population_size ticks
+  if (tick_count.load() % p->speciating_parameters.population == 0) {
+    // Age all species (increment age counter)
+    for (auto& s : p->species) {
+      s.increment_age();
+    }
+
+    // Reset champion flags for new generation
+    p->reset_champion_flags();
+  }
+
+  // Periodic species cleanup (every 10 generations)
+  // Skip tick 0 to avoid removing all species before fitness is built
+  size_t cleanup_period = p->speciating_parameters.population * 10;
+  if (tick_count.load() > 0 && tick_count.load() % cleanup_period == 0) {
+    p->remove_stale_species();
+    p->remove_weak_species();
   }
 
   // Increment tick counter
