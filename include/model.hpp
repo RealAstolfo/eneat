@@ -1,10 +1,8 @@
 #ifndef ENEAT_MODEL_HPP
 #define ENEAT_MODEL_HPP
 
-#include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -39,37 +37,12 @@ struct model {
   size_t population_size() const;
 
   // Persistence
-  bool save_best();
   bool save_pool();
-  bool load_best(std::string file_name);
   bool load_pool(std::string file_name);
 
   // Disable auto-save on destruction (for read-only/play mode)
   void set_read_only(bool read_only = true) { read_only_ = read_only; }
   bool is_read_only() const { return read_only_; }
-
-  // Thread-safe access to best brain (lock-free for fitness)
-  brain get_best_brain() const {
-    std::lock_guard lock(best_brain_mutex_);
-    return best_brain_;
-  }
-
-  size_t get_best_fitness() const {
-    return best_fitness_.load(std::memory_order_acquire);
-  }
-
-  void set_best_brain(const brain& b, size_t fitness) {
-    size_t expected = best_fitness_.load(std::memory_order_acquire);
-    while (fitness > expected) {
-      if (best_fitness_.compare_exchange_weak(expected, fitness,
-          std::memory_order_acq_rel, std::memory_order_acquire)) {
-        std::lock_guard lock(best_brain_mutex_);
-        best_brain_ = b;
-        return;
-      }
-      // expected updated by CAS, loop will check if still better
-    }
-  }
 
   const fitness_func_t get_fitness;
   std::string model_name;
@@ -79,11 +52,6 @@ struct model {
   ethreads::sync_shared_value<size_t> tick_count{0};
 
 private:
-  // Lock-free fitness tracking with mutex only for brain copy
-  std::atomic<size_t> best_fitness_{0};
-  mutable std::mutex best_brain_mutex_;
-  brain best_brain_;
-
   bool read_only_ = false;
   size_t eval_index_ = 0;  // Round-robin evaluation index
   size_t batch_size_ = std::thread::hardware_concurrency();  // Parallel eval batch size

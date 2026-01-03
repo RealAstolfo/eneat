@@ -29,13 +29,11 @@ model::model(
   this->model_name = std::move(model_name);
   this->p = std::make_unique<pool>(input, output, population, bias, recurrent);
   load_pool(this->model_name + "_pool");
-  load_best(this->model_name + "_best");
 
   srand(time(NULL));
 }
 
 model::~model() {
-  save_best();   // No-op if read_only_
   save_pool();   // No-op if read_only_
 }
 
@@ -46,16 +44,11 @@ size_t model::population_size() const {
 }
 
 // Evaluate a genome copy and return fitness (safe across co_await points)
+// Note: Pool tracks best genome via set_genome_fitness() -> update_best_genome()
 ethreads::coro_task<size_t> model::evaluate_genome_copy_async(genome g) {
   brain net;
   net = g;
   size_t fitness = co_await get_fitness(net);
-
-  // Update best if this is better (thread-safe via sync_shared_value)
-  if (fitness > get_best_fitness()) {
-    set_best_brain(net, fitness);
-  }
-
   co_return fitness;
 }
 
@@ -184,19 +177,6 @@ ethreads::coro_task<void> model::evolve_async(std::size_t ticks) {
   }
 }
 
-bool model::save_best() {
-  if (read_only_) return false;  // Don't save in read-only mode
-  const std::string name = this->model_name + "_best";
-  std::ofstream of;
-  of.open(name.data(), std::ios::trunc);
-  zstream compressor(&of);
-  brain best_to_save = get_best_brain();
-  compressor << best_to_save;
-  compressor << std::flush;
-  of.close();
-  return true;
-}
-
 bool model::save_pool() {
   if (read_only_) return false;  // Don't save in read-only mode
   const std::string name = this->model_name + "_pool";
@@ -207,25 +187,6 @@ bool model::save_pool() {
   compressor << std::flush;
   of.close();
   return true;
-}
-
-bool model::load_best(std::string file_name) {
-  std::ifstream best_file;
-  best_file.open(file_name.data());
-  if (best_file.is_open()) {
-    zstream decompressor(&best_file);
-    brain loaded_best;
-    decompressor >> loaded_best;
-    // Use lock directly since we're loading (not comparing fitness)
-    {
-      std::lock_guard lock(best_brain_mutex_);
-      best_brain_ = loaded_best;
-    }
-    best_fitness_.store(0, std::memory_order_release);
-    return true;
-  }
-
-  return false;
 }
 
 bool model::load_pool(std::string file_name) {
