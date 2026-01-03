@@ -1,0 +1,621 @@
+# ENEAT Neural Network Execution
+# Brain construction, neuron structure, and evaluation flow
+
+direction: down
+
+style: {
+  fill: "#2D2D2D"
+}
+
+title: |md
+  # Neural Network Construction & Evaluation
+  Genome -> Brain -> Neurons -> Evaluation
+| {
+  style: {
+    fill: "#2D2D2D"
+    font-color: "#E8DCC8"
+    stroke: transparent
+  }
+}
+
+# ============================================================================
+# BRAIN STRUCTURE
+# ============================================================================
+brain: |md
+  ## struct brain
+  **include/brain.hpp, src/brain.cpp**
+| {
+  style: {
+    fill: "#3D3D3D"
+    stroke: "#A0522D"
+    stroke-width: 3
+    font-color: "#E8DCC8"
+    border-radius: 8
+    shadow: true
+  }
+
+  fields: |md
+    ### Fields
+    ```cpp
+    vector<neuron> neurons
+    vector<trait> traits
+    bool recurrent = false
+    bool hebbian_enabled = false
+    vector<size_t> input_neurons
+    vector<size_t> bias_neurons
+    vector<size_t> output_neurons
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  eval_methods: |md
+    ### Evaluation Methods
+    ```cpp
+    void evaluate(input, output)
+      // Dispatches to recurrent/non-recurrent
+
+    void evaluate_nonrecurrent(input, output)
+      // DFS from outputs, no cycles
+
+    void evaluate_recurrent(input, output)
+      // Time-step based, allows cycles
+    ```
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  hebbian_methods: |md
+    ### Hebbian Learning Methods
+    ```cpp
+    void apply_hebbian_learning()
+      // Modifies weights based on activations
+
+    exfloat oldhebbian(weight, maxweight,
+      active_in, active_out,
+      hebb_rate, pre_rate, post_rate)
+      // Original rtNEAT algorithm
+
+    exfloat hebbian(weight, maxweight,
+      active_in, active_out,
+      hebb_rate, pre_rate, post_rate)
+      // Floreano & Urzelai 2000
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  state_methods: |md
+    ### State Management
+    ```cpp
+    void reset_state()
+    void flush()
+    void flushback(neuron_idx)
+    void load_sensors(input)
+    void override_outputs(values)
+    void clear_overrides()
+    bool outputs_ready()
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# NEURON STRUCTURE
+# ============================================================================
+neuron: |md
+  ## struct neuron
+  **include/neuron.hpp**
+| {
+  style: {
+    fill: "#3D3D3D"
+    stroke: "#A0522D"
+    stroke-width: 3
+    font-color: "#E8DCC8"
+    border-radius: 8
+    shadow: true
+  }
+
+  type_field: |md
+    ### Type & Identity
+    ```cpp
+    neuron_place type = HIDDEN
+    // enum: INPUT, OUTPUT, HIDDEN, BIAS
+    ```
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  activation_fields: |md
+    ### Activation State
+    ```cpp
+    exfloat value = 0.0f
+      // Current activation
+
+    exfloat last_activation = 0.0f
+      // Previous timestep (t-1)
+
+    exfloat last_activation2 = 0.0f
+      // Time-delayed (t-2)
+
+    exfloat activation_count = 0.0f
+      // Counts activations
+
+    bool visited = false
+      // For DFS traversal
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  connection_field: |md
+    ### Incoming Connections
+    ```cpp
+    vector<neuron_connection> in_connections
+    ai_func_type activation_function = RELU
+    ```
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+
+  trait_field: |md
+    ### Trait Parameters
+    ```cpp
+    size_t trait_id = 0
+    exfloat params[8] = {0.0f}
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  override_field: |md
+    ### rtNEAT Override
+    ```cpp
+    exfloat override_value = 0.0f
+    bool override_active = false
+
+    void override_output(new_output)
+    bool overridden()
+    void activate_override()
+    void clear_override()
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  sensor_methods: |md
+    ### Sensor Methods
+    ```cpp
+    bool sensor_load(input_value)
+      // Load input without time shift
+
+    exfloat get_active_out()
+      // Returns value if activated
+
+    exfloat get_active_out_td()
+      // Time-delayed output (t-1)
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# NEURON CONNECTION
+# ============================================================================
+neuron_connection: |md
+  ## struct neuron_connection
+  **include/neuron.hpp**
+  ---
+  ```cpp
+  size_t from_neuron        // Source index
+  exfloat weight            // Connection weight
+  size_t trait_id = 0       // Hebbian trait
+  bool is_recurrent = false
+  bool is_time_delayed = false
+    // Uses last_activation2
+  exfloat params[8] = {0.0f}
+  exfloat added_weight = 0.0f
+    // Accumulated learning
+  ```
+| {
+  style: {
+    fill: "#353535"
+    stroke: "#CD853F"
+    stroke-width: 2
+    font-color: "#E8DCC8"
+    border-radius: 4
+  }
+}
+
+# ============================================================================
+# NEURON TYPES
+# ============================================================================
+neuron_types: Neuron Types {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  input: INPUT {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      font-color: "#E8DCC8"
+      border-radius: 20
+    }
+  }
+
+  bias: BIAS {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      font-color: "#E8DCC8"
+      border-radius: 20
+    }
+  }
+
+  hidden: HIDDEN {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      font-color: "#2D2D2D"
+      border-radius: 4
+    }
+  }
+
+  output: OUTPUT {
+    style: {
+      fill: "#A0522D"
+      stroke: "#8B4513"
+      font-color: "#E8DCC8"
+      border-radius: 20
+    }
+  }
+
+  input -> hidden
+  bias -> hidden
+  hidden -> output
+  hidden -> hidden: "recurrent" {
+    style: {
+      stroke-dash: 3
+    }
+  }
+}
+
+# ============================================================================
+# EVALUATION FLOW - NON-RECURRENT
+# ============================================================================
+eval_nonrecurrent: Non-Recurrent Evaluation (DFS) {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#6B8E23"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  step1: |md
+    **1. Load Inputs**
+    Set input neuron values
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  step2: |md
+    **2. DFS from Outputs**
+    For each output neuron:
+    recursive evaluate_node()
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      font-color: "#2D2D2D"
+    }
+  }
+
+  step3: |md
+    **3. evaluate_node(n)**
+    ```
+    if visited: return value
+    visited = true
+    sum = 0
+    for conn in in_connections:
+      sum += evaluate_node(from)
+             * conn.weight
+    value = activation(sum)
+    return value
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  step4: |md
+    **4. Collect Outputs**
+    Read output neuron values
+  | {
+    style: {
+      fill: "#A0522D"
+      stroke: "#8B4513"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  step1 -> step2 -> step3 -> step4
+}
+
+# ============================================================================
+# EVALUATION FLOW - RECURRENT
+# ============================================================================
+eval_recurrent: Recurrent Evaluation (Time-Step) {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#8B4513"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  r_step1: |md
+    **1. Shift Time**
+    ```cpp
+    last_activation2 = last_activation
+    last_activation = value
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  r_step2: |md
+    **2. Load Inputs**
+    Set input & bias values
+    increment activation_count
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  r_step3: |md
+    **3. Propagate**
+    For each neuron (topo order):
+    ```cpp
+    sum = 0
+    for conn in in_connections:
+      if conn.is_time_delayed:
+        sum += from.last_activation2
+               * conn.weight
+      else if conn.is_recurrent:
+        sum += from.last_activation
+               * conn.weight
+      else:
+        sum += from.value * conn.weight
+    value = activation(sum)
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  r_step4: |md
+    **4. Apply Hebbian**
+    If hebbian_enabled:
+    apply_hebbian_learning()
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      font-color: "#2D2D2D"
+    }
+  }
+
+  r_step1 -> r_step2 -> r_step3 -> r_step4
+}
+
+# ============================================================================
+# HEBBIAN LEARNING ALGORITHMS
+# ============================================================================
+hebbian_algorithms: Hebbian Learning Algorithms {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#8B4513"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  oldhebbian: |md
+    ### oldhebbian (Original rtNEAT)
+    ```cpp
+    delta = hebb_rate
+          * (maxweight - weight)
+          * active_in * active_out
+          + pre_rate
+          * (maxweight - weight)
+          * active_in
+          + post_rate
+          * (0 - weight)
+          * active_out
+
+    return weight + delta
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  floreano: |md
+    ### hebbian (Floreano & Urzelai 2000)
+    ```cpp
+    // Adjust activations to [-1, 1]
+    in_adj = 2 * active_in - 1
+    out_adj = 2 * active_out - 1
+
+    delta = hebb_rate * in_adj * out_adj
+          + pre_rate * in_adj
+          + post_rate * out_adj
+
+    new_weight = weight + delta
+    // Clamp to [-maxweight, maxweight]
+    return clamp(new_weight)
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# ACTIVATION FUNCTIONS VISUALIZATION
+# ============================================================================
+activation_functions: Activation Functions {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#8A9A5B"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  relu_f: |md
+    **ReLU**
+    max(0, x)
+  | {
+    style: { fill: "#3A3A3A"; stroke: "#8A9A5B"; font-color: "#D2B48C" }
+  }
+
+  linear_f: |md
+    **Linear**
+    x
+  | {
+    style: { fill: "#3A3A3A"; stroke: "#8A9A5B"; font-color: "#D2B48C" }
+  }
+
+  sigmoid_f: |md
+    **Sigmoid**
+    2/(1+e^-x) - 1
+  | {
+    style: { fill: "#3A3A3A"; stroke: "#8A9A5B"; font-color: "#D2B48C" }
+  }
+
+  tanh_f: |md
+    **Tanh**
+    tanh(x)
+  | {
+    style: { fill: "#3A3A3A"; stroke: "#8A9A5B"; font-color: "#D2B48C" }
+  }
+
+  gelu_f: |md
+    **GELU**
+    Gaussian Error
+  | {
+    style: { fill: "#3A3A3A"; stroke: "#8A9A5B"; font-color: "#D2B48C" }
+  }
+
+  swish_f: |md
+    **Swish**
+    x * sigmoid(x)
+  | {
+    style: { fill: "#3A3A3A"; stroke: "#8A9A5B"; font-color: "#D2B48C" }
+  }
+}
+
+# ============================================================================
+# CONNECTIONS
+# ============================================================================
+
+brain -> neuron: "neurons: vector<neuron>" {
+  style: { stroke: "#CD853F"; stroke-width: 2 }
+}
+
+neuron -> neuron_connection: "in_connections" {
+  style: { stroke: "#CD853F"; stroke-width: 2 }
+}
+
+brain -> eval_nonrecurrent: "if !recurrent" {
+  style: { stroke: "#6B8E23"; stroke-width: 2; stroke-dash: 3 }
+}
+
+brain -> eval_recurrent: "if recurrent" {
+  style: { stroke: "#8B4513"; stroke-width: 2; stroke-dash: 3 }
+}
+
+eval_recurrent -> hebbian_algorithms: "if hebbian_enabled" {
+  style: { stroke: "#8B4513"; stroke-width: 2; stroke-dash: 3 }
+}
+
+neuron -> activation_functions: "activation_function" {
+  style: { stroke: "#8A9A5B"; stroke-width: 1; stroke-dash: 3 }
+}

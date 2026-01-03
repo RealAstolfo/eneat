@@ -1,0 +1,679 @@
+# ENEAT Evolution Cycle
+# Mutation operations, crossover types, speciation, and rtNEAT features
+
+direction: down
+
+style: {
+  fill: "#2D2D2D"
+}
+
+title: |md
+  # NEAT Evolution Cycle
+  Real-time continuous evolution with rtNEAT features
+| {
+  style: {
+    fill: "#2D2D2D"
+    font-color: "#E8DCC8"
+    stroke: transparent
+  }
+}
+
+# ============================================================================
+# MAIN EVOLUTION CYCLE
+# ============================================================================
+evolution_cycle: Evolution Tick Cycle {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#A0522D"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  evaluate: |md
+    **1. EVALUATE**
+    Parallel batch evaluation
+    using fitness_func
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      border-radius: 8
+    }
+  }
+
+  replace: |md
+    **2. REPLACE**
+    remove_worst_probabilistic()
+    Fitness-proportional removal
+    (inverted: low fitness = high removal prob)
+  | {
+    style: {
+      fill: "#A52A2A"
+      stroke: "#8B4513"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      border-radius: 8
+    }
+  }
+
+  reproduce: |md
+    **3. REPRODUCE**
+    breed_child(species)
+    Crossover + Mutation
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+      border-radius: 8
+    }
+  }
+
+  speciate: |md
+    **4. SPECIATE**
+    add_to_species(child)
+    Compatibility distance check
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      border-radius: 8
+    }
+  }
+
+  evaluate -> replace -> reproduce -> speciate
+  speciate -> evaluate: "next tick" {
+    style: {
+      stroke-dash: 3
+      stroke: "#5A5A5A"
+    }
+  }
+}
+
+# ============================================================================
+# MUTATION OPERATIONS
+# ============================================================================
+mutations: Mutation Operations {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#B87333"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  mutate_weight: |md
+    ### mutate_weight() - 90%
+    ```cpp
+    for each gene (skip frozen):
+      if random < 0.9:  // perturb
+        weight += random(-1,1) * step_size
+      else:             // reset
+        weight = random(-2, 2)
+      clamp(weight, -8, 8)
+      mutation_num++
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  mutate_link: |md
+    ### mutate_link() - 10%
+    ```cpp
+    // Try up to 20 times:
+    from = random_neuron()
+    to = random_neuron()
+
+    // Validate:
+    // - No output -> output
+    // - No bias targets
+    // - No duplicates
+    // - BFS cycle check (non-recurrent)
+
+    if recur_only_prob (20%):
+      force recurrent connection
+
+    new gene:
+      weight = random(-1, 1)
+      activation = random_func()
+      innovation = next_innovation()
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  mutate_neuron: |md
+    ### mutate_neuron() - 0.25%
+    ```cpp
+    // Select random enabled gene
+    old_gene.enabled = false
+
+    new_neuron_id = max_neuron++
+
+    // First link (preserves behavior)
+    gene1: from -> new_neuron
+      weight = 1.0
+      innovation = new
+
+    // Second link (inherits)
+    gene2: new_neuron -> to
+      weight = old_gene.weight
+      activation = old_gene.activation
+      innovation = new
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  mutate_bias: |md
+    ### mutate_bias_neuron() - 2%
+    ```cpp
+    // Evolve entirely new bias neuron
+    new_neuron marked as bias_source
+    Connect to random hidden/output
+    weight = random(-2, 2)
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  mutate_activation: |md
+    ### mutate_activation() - 7%
+    ```cpp
+    random_gene.activation =
+      random(RELU..NORMALIZE)
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  mutate_trait: |md
+    ### Trait Mutations - 10%
+    (only if no structural mutation)
+    ```cpp
+    mutate_random_trait(g)
+      // Create or modify trait
+    mutate_link_trait(g)
+      // Assign trait to random link
+    mutate_node_trait(g)
+      // Assign trait to random node
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  mutate_add_sensor: |md
+    ### mutate_add_sensor()
+    ```cpp
+    // Connect unconnected inputs
+    // to output neurons
+    // rtNEAT feature
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# CROSSOVER TYPES
+# ============================================================================
+crossover: Crossover Types {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#6B8E23"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  multipoint: |md
+    ### crossover_multipoint() - Default
+    ```cpp
+    // Ensure g1 is fitter parent
+    // Average traits from both parents
+
+    for gene in g1.genes:
+      if matching in g2:
+        child.gene = random(g1, g2)
+      else: // disjoint/excess
+        child.gene = g1.gene
+
+    // 75% disabled rule:
+    // If either parent disabled,
+    // 75% chance child inherits disabled
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  multipoint_avg: |md
+    ### crossover_multipoint_avg() - 40%
+    ```cpp
+    // Same as multipoint BUT:
+
+    for matching genes:
+      child.weight = average(g1, g2)
+      child.activation = random(g1, g2)
+      child.mutation_num = average(g1, g2)
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  singlepoint: |md
+    ### crossover_singlepoint() - 0%
+    ```cpp
+    // Traditional GA-style
+    crossover_point = random_index
+
+    child = g1.genes[0..point]
+          + g2.genes[point..]
+
+    // Match genes at boundary
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  breed_flow: |md
+    ### breed_child(species) Flow
+    ```cpp
+    parent1, parent2 = select_parents()
+
+    if random < crossover_chance (75%):
+      child = crossover(p1, p2)
+    else:
+      child = copy(fitter_parent)
+
+    mutate_sync(child)
+    return child
+    ```
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+}
+
+# ============================================================================
+# SPECIATION
+# ============================================================================
+speciation: Speciation {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#4A5568"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  formula: |md
+    ### Compatibility Distance Formula
+    ```
+    D = delta_disjoint * DD
+      + delta_excess * DE
+      + delta_weights * DW
+
+    DD = count(disjoint genes)
+    DE = count(excess genes)
+    DW = avg(mutation_num diff)
+         for matching genes
+
+    if D < delta_threshold:
+      SAME SPECIES
+    else:
+      DIFFERENT SPECIES
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  parameters: |md
+    ### Speciation Parameters
+    ```cpp
+    delta_disjoint = 1.0
+    delta_excess = 1.0
+    delta_weights = 2.0
+    delta_threshold = 3.0
+    stale_species = 15
+    survival_thresh = 0.2
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  add_to_species: |md
+    ### add_to_species(child)
+    ```cpp
+    for species in all_species:
+      representative = species.genomes[0]
+      if is_same_species(child, rep):
+        species.add(child)
+        return
+
+    // No match found
+    new_species = create_species()
+    new_species.add(child)
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  gene_types: |md
+    ### Gene Classification
+    ```
+    Genome A: [1, 2, 3, 5, 6, 8]
+    Genome B: [1, 2, 4, 5, 7]
+
+    Matching:  [1, 2, 5]
+    Disjoint:  [3, 4, 6] (within shared range)
+    Excess:    [7, 8] (beyond other's max)
+    ```
+  | {
+    style: {
+      fill: "#3A3A3A"
+      stroke: "#8A9A5B"
+      stroke-width: 2
+      font-color: "#D2B48C"
+    }
+  }
+}
+
+# ============================================================================
+# rtNEAT FEATURES
+# ============================================================================
+rtneat: rtNEAT Advanced Features {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#A0522D"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  delta_coding: |md
+    ### Delta Coding
+    Emergency diversity injection
+    ```cpp
+    // If no improvement for N generations:
+    check_delta_coding()
+
+    // Triggers massive random mutations
+    apply_delta_coding()
+      for all genomes:
+        apply random perturbations
+    ```
+  | {
+    style: {
+      fill: "#A52A2A"
+      stroke: "#8B4513"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  baby_stealing: |md
+    ### Babies Stolen
+    Offspring redistribution
+    ```cpp
+    redistribute_offspring()
+    // Take offspring from weak species
+    // Give to strong species
+    // Default: babies_stolen = 5
+    ```
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+
+  dynamic_threshold: |md
+    ### Dynamic Compatibility
+    Auto-adjust species count
+    ```cpp
+    adjust_compatibility_threshold()
+
+    // Every 10 offspring:
+    if species_count > target (10):
+      delta_threshold += 0.1
+    else if species_count < target:
+      delta_threshold -= 0.1
+
+    // Clamp minimum: 0.3
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  champion_preserve: |md
+    ### Champion Preservation
+    ```cpp
+    // Each species clones best genome
+    // once per generation
+
+    champion_preserved = true
+    // Prevents double-cloning
+    ```
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  maturity: |md
+    ### Maturity-Based Selection
+    ```cpp
+    time_alive: sync_shared_value<size_t>
+
+    // Only mature organisms can be
+    // selected for replacement
+
+    genome.age() // increment each gen
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  super_champ: |md
+    ### Super Champion
+    ```cpp
+    pop_champ = true
+    super_champ_offspring = N
+
+    // Reserved offspring count
+    // for population champion
+    // 80% weight-only mutation
+    // 20% structural mutation
+    ```
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+}
+
+# ============================================================================
+# SPECIES LIFECYCLE
+# ============================================================================
+species_lifecycle: Species Lifecycle {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  create: |md
+    **Create**
+    novel = true
+    Protected first gen
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  grow: |md
+    **Grow**
+    Add genomes
+    Track fitness
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      font-color: "#2D2D2D"
+    }
+  }
+
+  stagnate: |md
+    **Stagnate**
+    staleness++
+    No improvement
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  obliterate: |md
+    **Obliterate**
+    Force penalty
+    obliterate = true
+  | {
+    style: {
+      fill: "#A52A2A"
+      stroke: "#8B4513"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  extinct: |md
+    **Extinct**
+    remove_stale_species()
+    After 15 gens stale
+  | {
+    style: {
+      fill: "#5A5A5A"
+      stroke: "#708090"
+      font-color: "#E8DCC8"
+    }
+  }
+
+  create -> grow -> stagnate -> obliterate -> extinct
+}
+
+# ============================================================================
+# CONNECTIONS
+# ============================================================================
+
+evolution_cycle.reproduce -> mutations: "mutate()" {
+  style: { stroke: "#B87333"; stroke-width: 2 }
+}
+
+evolution_cycle.reproduce -> crossover: "crossover()" {
+  style: { stroke: "#6B8E23"; stroke-width: 2 }
+}
+
+evolution_cycle.speciate -> speciation: "compatibility check" {
+  style: { stroke: "#4A5568"; stroke-width: 2 }
+}
+
+evolution_cycle -> rtneat: "advanced features" {
+  style: { stroke: "#A0522D"; stroke-width: 2; stroke-dash: 3 }
+}
+
+speciation -> species_lifecycle: "species management" {
+  style: { stroke: "#5A5A5A"; stroke-width: 1; stroke-dash: 3 }
+}
