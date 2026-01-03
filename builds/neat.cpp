@@ -62,28 +62,73 @@ int main() {
   };
 
   std::string model_name = "xor";
-  model xor_model(fitness_function, model_name, 2, 1, 1000, 1, true);
-  xor_model.p->speciating_parameters.time_alive_minimum = 5;
+  // Start with small population (100) to demonstrate dynamic growth
+  model xor_model(fitness_function, model_name, 2, 1, 100, 1, true);
 
-  std::cerr << "Starting evolution (full async)..." << std::endl;
+  // === Configure Dynamic Population Control Parameters ===
+  auto& params = xor_model.p->speciating_parameters;
+  params.population = 100;                    // Initial target (will change dynamically)
+  params.time_alive_minimum = 5;              // Maturity age before selection eligibility
+  params.delta_coding_enabled = true;         // Enable stagnation recovery
+  params.babies_stolen = 5;                   // Offspring redistribution to strong species
+  params.dynamic_threshold_enabled = true;    // Auto-adjust species count
+  params.target_species_count = 8;            // Desired number of species
+  params.compat_adjust_frequency = 10;        // Adjust threshold every 10 offspring
+  params.compat_threshold_delta = 0.1f;       // Threshold adjustment step
+  params.survival_thresh = 0.2f;              // Top 20% survive each generation
+
+  std::cerr << "Starting evolution with dynamic population control..." << std::endl;
+  std::cerr << "Phase 1: Growing population (target: 100 -> 200)" << std::endl;
 
   // Use fully asynchronous evolution via model::tick_async()
   size_t last_report_tick = 0;
   size_t tick = 0;
 
+  size_t current_phase = 1;
+  float last_threshold = params.delta_threshold;
+
   while (xor_model.p->max_fitness.load() / (exfloat)std::numeric_limits<size_t>::max() < needed_fitness) {
+    // === Dynamic Population Control: Phase-based target adjustment ===
+    if (tick >= 5000 && current_phase == 1) {
+      current_phase = 2;
+      params.population = 200;  // Grow population
+      params.target_species_count = 12;  // More species for exploration
+      std::cerr << "\n[Phase 2] Growing population: target 200, species target 12" << std::endl;
+    } else if (tick >= 15000 && current_phase == 2) {
+      current_phase = 3;
+      params.population = 150;  // Stabilize population
+      params.target_species_count = 8;   // Fewer species for exploitation
+      std::cerr << "\n[Phase 3] Stabilizing: target 150, species target 8" << std::endl;
+    }
+
     // Use tick_async for async evaluation
     auto tick_task = xor_model.tick_async();
     tick_task.start();
     tick_task.get();  // Wait for tick to complete
 
-    // Progress report
+    // Enhanced progress report with population dynamics
     if (tick - last_report_tick >= 1000) {
       last_report_tick = tick;
-      std::cerr << "Tick: " << tick
-                << " Pop: " << xor_model.population_size()
-                << " Species: " << xor_model.p->species.size()
-                << " Fitness: " << xor_model.p->max_fitness.load() / (exfloat)std::numeric_limits<size_t>::max()
+      float fitness = xor_model.p->max_fitness.load() / (exfloat)std::numeric_limits<size_t>::max();
+      float threshold_change = params.delta_threshold - last_threshold;
+      last_threshold = params.delta_threshold;
+
+      std::cerr << "[Tick " << tick << "] "
+                << "Pop: " << xor_model.population_size() << "/" << params.population
+                << " | Species: " << xor_model.p->species.size() << "/" << params.target_species_count
+                << " | Fitness: " << fitness
+                << " | Thresh: " << params.delta_threshold;
+
+      if (threshold_change > 0.01f) {
+        std::cerr << " (+)";
+      } else if (threshold_change < -0.01f) {
+        std::cerr << " (-)";
+      }
+
+      std::cerr << std::endl;
+      std::cerr << "  └─ Delta coding: " << (params.delta_coding_enabled ? "ON" : "OFF")
+                << " | Babies stolen: " << params.babies_stolen
+                << " | Phase: " << current_phase
                 << std::endl;
     }
     tick++;

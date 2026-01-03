@@ -36,8 +36,19 @@ int main() {
 
   std::string model_name = "xor_coro";
   // model(fitness_func, name, inputs, outputs, population, bias, recurrent)
-  model xor_model(fitness_function, model_name, 2, 1, 1000, 1, true);
-  xor_model.p->speciating_parameters.time_alive_minimum = 5;  // rtNEAT maturity
+  model xor_model(fitness_function, model_name, 2, 1, 150, 1, true);
+
+  // === Configure Dynamic Population Control Parameters ===
+  auto& params = xor_model.p->speciating_parameters;
+  params.population = 150;                    // Target population size
+  params.time_alive_minimum = 5;              // Maturity age before selection eligibility
+  params.delta_coding_enabled = true;         // Enable stagnation recovery
+  params.babies_stolen = 5;                   // Offspring redistribution to strong species
+  params.dynamic_threshold_enabled = true;    // Auto-adjust species count
+  params.target_species_count = 10;           // Initial species target (will adapt)
+  params.compat_adjust_frequency = 10;        // Adjust threshold every 10 offspring
+  params.compat_threshold_delta = 0.1f;       // Threshold adjustment step
+  params.survival_thresh = 0.2f;              // Top 20% survive each generation
   
   // Initialize visualizer on main thread
   NetworkVisualizer visualizer;
@@ -54,13 +65,28 @@ int main() {
     size_t last_update_tick = 0;
 
     do {
-      // Run 10 ticks of evolution per update
+      // Run 100 ticks of evolution per update
       co_await xor_model.evolve_async(100);
 
       current_best = xor_model.p->max_fitness.load();
       size_t current_tick = xor_model.tick_count.load();
+      float current_fitness = current_best / (exfloat)std::numeric_limits<size_t>::max();
 
-      // Update visualization every 50 ticks
+      // === Dynamic Population Control: Adaptive species targeting ===
+      // Low fitness -> more species for exploration
+      // High fitness -> fewer species for exploitation
+      if (current_fitness < 0.3f) {
+        params.target_species_count = 15;  // Explore: many species
+        params.population = 200;            // Larger population for diversity
+      } else if (current_fitness < 0.5f) {
+        params.target_species_count = 10;  // Balanced
+        params.population = 150;
+      } else {
+        params.target_species_count = 6;   // Exploit: fewer species
+        params.population = 100;            // Focus on best solutions
+      }
+
+      // Update visualization every 10 ticks
       if (current_tick - last_update_tick >= 10) {
         last_update_tick = current_tick;
 
@@ -70,13 +96,17 @@ int main() {
           best_brain_copy.store(*best);
           update_ready.set();
 
+          // Enhanced output with population dynamics
+          const char* mode = current_fitness < 0.3f ? "Exploring" :
+                            (current_fitness < 0.5f ? "Balanced" : "Exploiting");
+
           std::cerr
-              << "Tick: " << current_tick
-              << " Population: " << xor_model.population_size()
-              << " Species: " << xor_model.p->species.size()
-              << " Fitness: "
-              << current_best / (exfloat)std::numeric_limits<size_t>::max()
-              << " Neurons: " << best->neurons.size()
+              << "[Tick " << current_tick << "] "
+              << "Pop: " << xor_model.population_size() << "/" << params.population
+              << " | Species: " << xor_model.p->species.size() << "/" << params.target_species_count
+              << " | Fitness: " << current_fitness
+              << " | Mode: " << mode
+              << " | Neurons: " << best->neurons.size()
               << "        \r";
         }
       }
