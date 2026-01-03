@@ -7,7 +7,7 @@
 #include <limits>
 
 #define xor_max_n 4
-#define needed_fitness 0.75
+#define needed_fitness 0.80
 
 const std::vector<std::pair<std::vector<exfloat>, exfloat>> test_cases = {
     {{0.0, 0.0}, 0.0f},

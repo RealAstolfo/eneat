@@ -66,7 +66,35 @@ neat_coro.o:
 neat_coro: ai.o neat_coro.o network-visualizer.o vendors/ethreads/threading.o
 	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} $^ -o $@
 
-all: neat neat_coro
+# Genome control demo (gene expression, crossover variants)
+neat_genome_control.o:
+	${CXX} ${CXXFLAGS} -c builds/neat_genome_control.cpp -o $@
+
+neat_genome_control: ai.o neat_genome_control.o vendors/ethreads/threading.o
+	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+
+# Hebbian learning demo (T-maze, temporal memory)
+neat_hebbian.o:
+	${CXX} ${CXXFLAGS} -c builds/neat_hebbian.cpp -o $@
+
+neat_hebbian: ai.o neat_hebbian.o vendors/ethreads/threading.o
+	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+
+# Coevolution demo (predator-prey, rtNEAT control)
+neat_coevolution.o:
+	${CXX} ${CXXFLAGS} -c builds/neat_coevolution.cpp -o $@
+
+neat_coevolution: ai.o neat_coevolution.o vendors/ethreads/threading.o
+	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+
+# Interactive visualization demo (custom labels, output override)
+neat_visualized.o:
+	${CXX} ${CXXFLAGS} -c builds/neat_visualized.cpp -o $@
+
+neat_visualized: ai.o neat_visualized.o network-visualizer.o vendors/ethreads/threading.o
+	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} $^ -o $@
+
+all: neat neat_coro neat_genome_control neat_hebbian neat_coevolution neat_visualized
 
 #########################################################################################
 # Debug builds for Valgrind
@@ -167,8 +195,10 @@ profile: neat-profile
 	@echo "  profile.txt - Text summary of hotspots"
 
 clean:
-	-rm -f neat neat_coro neat-valgrind neat_coro-valgrind neat-profile *.o *-debug.o *-profile.o
+	-rm -f neat neat_coro neat_genome_control neat_hebbian neat_coevolution neat_visualized
+	-rm -f neat-valgrind neat_coro-valgrind neat-profile *.o *-debug.o *-profile.o
 	-rm -f profile.svg profile.txt perf.data perf.data.old
+	-rm -f mux_best_brain.txt
 	make -C vendors/ethreads clean
 	make -C vendors/exstd clean
 	make -C vendors/emath clean
