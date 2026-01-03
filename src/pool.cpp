@@ -55,7 +55,7 @@ std::vector<std::pair<size_t, size_t>> pool::get_genome_indices() {
   std::vector<std::pair<size_t, size_t>> result;
   size_t species_idx = 0;
   for (auto& s : species) {
-    size_t genome_count = s.genomes.load().size();
+    size_t genome_count = s.genome_count();
     for (size_t i = 0; i < genome_count; i++) {
       result.push_back({species_idx, i});
     }
@@ -67,7 +67,7 @@ std::vector<std::pair<size_t, size_t>> pool::get_genome_indices() {
 size_t pool::get_population_size() {
   size_t count = 0;
   for (const auto& s : species) {
-    count += s.genomes.load().size();
+    count += s.genome_count();
   }
   return count;
 }
@@ -1338,14 +1338,15 @@ void pool::estimate_all_averages() {
     size_t sum = 0;
     size_t count = 0;
 
-    // Load genomes and iterate (read-only access)
-    auto genomes_copy = s.genomes.load();
-    for (const auto &g : genomes_copy) {
-      if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
-        sum += g.fitness.load();
-        count++;
+    // Zero-copy iteration
+    s.genomes.modify([&](const std::vector<genome>& gs) {
+      for (const auto &g : gs) {
+        if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
+          sum += g.fitness.load();
+          count++;
+        }
       }
-    }
+    });
 
     if (count > 0) {
       s.average_est.store(sum / count);
@@ -1375,21 +1376,22 @@ ethreads::coro_task<bool> pool::remove_worst_async() {
   size_t worst_genome_idx = 0;
   size_t min_fitness = std::numeric_limits<size_t>::max();
 
-  // Find worst organism among mature ones
+  // Find worst organism among mature ones (zero-copy iteration)
   size_t species_idx = 0;
   for (auto &s : species) {
-    auto genomes_copy = s.genomes.load();
-    for (size_t i = 0; i < genomes_copy.size(); i++) {
-      const auto &g = genomes_copy[i];
-      if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
-        size_t adj = g.adjusted_fitness.load();
-        if (adj < min_fitness) {
-          min_fitness = adj;
-          worst_species_idx = species_idx;
-          worst_genome_idx = i;
+    s.genomes.modify([&](const std::vector<genome>& gs) {
+      for (size_t i = 0; i < gs.size(); i++) {
+        const auto &g = gs[i];
+        if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
+          size_t adj = g.adjusted_fitness.load();
+          if (adj < min_fitness) {
+            min_fitness = adj;
+            worst_species_idx = species_idx;
+            worst_genome_idx = i;
+          }
         }
       }
-    }
+    });
     species_idx++;
   }
 
@@ -1408,7 +1410,7 @@ ethreads::coro_task<bool> pool::remove_worst_async() {
 
       // Remove empty species
       species.remove_if([](const specie &s) {
-        return s.genomes.load().empty();
+        return s.is_empty();
       });
 
       co_return true;  // Successfully removed an organism
@@ -1579,18 +1581,19 @@ bool pool::remove_worst() {
 
   size_t species_idx = 0;
   for (auto &s : species) {
-    auto genomes_copy = s.genomes.load();
-    for (size_t i = 0; i < genomes_copy.size(); i++) {
-      const auto &g = genomes_copy[i];
-      if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
-        size_t adj = g.adjusted_fitness.load();
-        if (adj < min_fitness) {
-          min_fitness = adj;
-          worst_species_idx = species_idx;
-          worst_genome_idx = i;
+    s.genomes.modify([&](const std::vector<genome>& gs) {
+      for (size_t i = 0; i < gs.size(); i++) {
+        const auto &g = gs[i];
+        if (g.time_alive.load() >= speciating_parameters.time_alive_minimum) {
+          size_t adj = g.adjusted_fitness.load();
+          if (adj < min_fitness) {
+            min_fitness = adj;
+            worst_species_idx = species_idx;
+            worst_genome_idx = i;
+          }
         }
       }
-    }
+    });
     species_idx++;
   }
 
@@ -1606,7 +1609,7 @@ bool pool::remove_worst() {
       });
 
       species.remove_if([](const specie &s) {
-        return s.genomes.load().empty();
+        return s.is_empty();
       });
 
       return true;
@@ -1680,7 +1683,7 @@ bool pool::remove_worst_probabilistic() {
 
     // Remove empty species
     species.remove_if([](const specie &s) {
-      return s.genomes.load().empty();
+      return s.is_empty();
     });
 
     return true;
@@ -1943,7 +1946,7 @@ void pool::reassign_all_species() {
 
   // Remove any species that became empty (shouldn't happen but safety check)
   species.remove_if([](const specie& s) {
-    return s.genomes.load().empty();
+    return s.is_empty();
   });
 }
 

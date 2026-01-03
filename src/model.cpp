@@ -44,11 +44,7 @@ model::~model() {
 // === rtNEAT: Real-time continuous evolution ===
 
 size_t model::population_size() const {
-  size_t count = 0;
-  for (const auto& s : p->species) {
-    count += s.genomes.load().size();
-  }
-  return count;
+  return p->get_population_size();
 }
 
 // Evaluate a genome copy and return fitness (safe across co_await points)

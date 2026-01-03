@@ -36,7 +36,7 @@ int main() {
 
   std::string model_name = "xor_coro";
   // model(fitness_func, name, inputs, outputs, population, bias, recurrent)
-  model xor_model(fitness_function, model_name, 2, 1, 1000, 1, false);
+  model xor_model(fitness_function, model_name, 2, 1, 10000, 1, true);
   xor_model.p->speciating_parameters.time_alive_minimum = 5;  // rtNEAT maturity
   
   // Initialize visualizer on main thread

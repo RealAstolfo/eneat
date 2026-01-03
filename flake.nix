@@ -28,6 +28,28 @@
           '';
         };
 
+        # Profiling shell with perf and flamegraph tools
+        devShells.profile = pkgs.mkShell {
+          buildInputs = with pkgs; [
+            zig
+            gcc
+            zlib
+            pkg-config
+            raylib
+            valgrind
+            linuxPackages.perf
+            flamegraph
+            hotspot  # Per-thread GUI analysis
+          ];
+
+          shellHook = ''
+            echo "ENEAT profiling environment"
+            echo "  Profile: make profile"
+            echo "  Hotspot: hotspot perf.data (per-thread analysis)"
+            echo "  Output:  profile.svg (flamegraph), profile.txt (text summary)"
+          '';
+        };
+
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "eneat";
           version = "0.1.0";

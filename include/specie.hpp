@@ -125,6 +125,24 @@ struct specie {
       staleness.store(0);
     }
   }
+
+  // Zero-copy genome count (avoids copying entire vector)
+  size_t genome_count() const {
+    size_t count = 0;
+    const_cast<specie*>(this)->genomes.modify([&count](std::vector<genome>& v) {
+      count = v.size();
+    });
+    return count;
+  }
+
+  // Zero-copy empty check (avoids copying entire vector)
+  bool is_empty() const {
+    bool empty = true;
+    const_cast<specie*>(this)->genomes.modify([&empty](std::vector<genome>& v) {
+      empty = v.empty();
+    });
+    return empty;
+  }
 };
 
 #endif

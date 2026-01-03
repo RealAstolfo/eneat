@@ -119,8 +119,56 @@ helgrind-neat: neat-valgrind
 helgrind-coro: neat_coro-valgrind
 	valgrind --tool=helgrind --suppressions=vendors/ethreads/valgrind.supp ./neat_coro-valgrind
 
+#########################################################################################
+# Profiling builds (optimized with frame pointers for accurate stack traces)
+#########################################################################################
+
+CFLAGS_PROFILE = -march=native -O3 -g -fno-omit-frame-pointer -Wall -Wextra -pedantic $(INC) $(ZLIB_CFLAGS)
+CXXFLAGS_PROFILE = -std=c++20 $(CFLAGS_PROFILE)
+
+brain-profile.o:
+	${CXX} ${CXXFLAGS_PROFILE} -c src/brain.cpp -o $@
+
+mutation-rate-container-profile.o:
+	${CXX} ${CXXFLAGS_PROFILE} -c src/mutation_rate_container.cpp -o $@
+
+pool-profile.o:
+	${CXX} ${CXXFLAGS_PROFILE} -c src/pool.cpp -o $@
+
+speciating-parameter-container-profile.o:
+	${CXX} ${CXXFLAGS_PROFILE} -c src/speciating_parameter_container.cpp -o $@
+
+model-profile.o:
+	${CXX} ${CXXFLAGS_PROFILE} -c src/model.cpp -o $@
+
+ai-profile.o: brain-profile.o mutation-rate-container-profile.o pool-profile.o \
+              speciating-parameter-container-profile.o model-profile.o
+	ld -r $^ -o $@
+
+vendors/ethreads/threading-profile.o:
+	make -C vendors/ethreads threading-profile.o
+
+neat-profile.o:
+	${CXX} ${CXXFLAGS_PROFILE} -c builds/neat.cpp -o $@
+
+neat-profile: ai-profile.o neat-profile.o vendors/ethreads/threading-profile.o
+	${CXX} ${CXXFLAGS_PROFILE} ${ZLIB} $^ -o $@
+
+# Run profiling and generate flamegraph + text report
+# Uses frame pointer call-graph (faster than dwarf) with 10 second timeout
+profile: neat-profile
+	rm -f xor_pool xor_best perf.data
+	timeout 10s perf record -F 997 -g --call-graph fp ./neat-profile || true
+	perf script | stackcollapse-perf.pl | flamegraph.pl > profile.svg
+	perf report --stdio --no-children > profile.txt
+	@echo ""
+	@echo "Generated:"
+	@echo "  profile.svg - Flamegraph (open in browser)"
+	@echo "  profile.txt - Text summary of hotspots"
+
 clean:
-	-rm -f neat neat_coro neat-valgrind neat_coro-valgrind *.o *-debug.o
+	-rm -f neat neat_coro neat-valgrind neat_coro-valgrind neat-profile *.o *-debug.o *-profile.o
+	-rm -f profile.svg profile.txt perf.data perf.data.old
 	make -C vendors/ethreads clean
 	make -C vendors/exstd clean
 	make -C vendors/emath clean
