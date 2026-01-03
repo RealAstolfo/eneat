@@ -88,13 +88,10 @@ struct neuron {
     override_value = 0.0f;
   }
 
-  // rtNEAT: Sensor load with time-delay memory shifting
-  // Reference: nnode.cpp:66-88
+  // rtNEAT: Sensor load - does NOT shift time delays
+  // Reference: nnode.cpp:155-167 (sensor_load just sets value)
   bool sensor_load(exfloat input_value) {
     if (type == INPUT || type == BIAS) {
-      // Shift activation history
-      last_activation2 = last_activation;
-      last_activation = value;
       activation_count += 1.0f;
       value = input_value;
       return true;

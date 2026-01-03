@@ -532,6 +532,11 @@ void brain::flush() {
     neurons[i].activation_count = 0.0f;
     neurons[i].visited = false;
     // Note: Don't clear overrides - they may be intentionally set
+
+    // Clear added_weight on all connections (matching rtNEAT)
+    for (auto& conn : neurons[i].in_connections) {
+      conn.added_weight = 0.0f;
+    }
   }
 }
 
