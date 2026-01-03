@@ -36,7 +36,7 @@ int main() {
 
   std::string model_name = "xor_coro";
   // model(fitness_func, name, inputs, outputs, population, bias, recurrent)
-  model xor_model(fitness_function, model_name, 2, 1, 10000, 1, true);
+  model xor_model(fitness_function, model_name, 2, 1, 1000, 1, true);
   xor_model.p->speciating_parameters.time_alive_minimum = 5;  // rtNEAT maturity
   
   // Initialize visualizer on main thread
@@ -57,7 +57,7 @@ int main() {
       // Run 10 ticks of evolution per update
       co_await xor_model.evolve_async(100);
 
-      current_best = xor_model.get_best_fitness();
+      current_best = xor_model.p->max_fitness.load();
       size_t current_tick = xor_model.tick_count.load();
 
       // Update visualization every 50 ticks
@@ -65,30 +65,35 @@ int main() {
         last_update_tick = current_tick;
 
         // Copy best brain for visualization (thread-safe)
-        best_brain_copy.store(xor_model.get_best_brain());
-        update_ready.set();
+        auto best = xor_model.p->get_best_brain();
+        if (best) {
+          best_brain_copy.store(*best);
+          update_ready.set();
 
-        std::cerr
-            << "Tick: " << current_tick
-            << " Population: " << xor_model.population_size()
-            << " Species: " << xor_model.p->species.size()
-            << " Fitness: "
-            << current_best / (exfloat)std::numeric_limits<size_t>::max()
-            << " Neurons: " << xor_model.get_best_brain().neurons.size()
-            << "        \r";
+          std::cerr
+              << "Tick: " << current_tick
+              << " Population: " << xor_model.population_size()
+              << " Species: " << xor_model.p->species.size()
+              << " Fitness: "
+              << current_best / (exfloat)std::numeric_limits<size_t>::max()
+              << " Neurons: " << best->neurons.size()
+              << "        \r";
+        }
       }
     } while (current_best /
                  (exfloat)std::numeric_limits<size_t>::max() <
              needed_fitness);
 
-    std::vector<exfloat> output = {0};
-    brain final_brain = xor_model.get_best_brain();
-
     std::cerr << std::endl;
-    for (const auto &[test_input, expected_output] : test_cases) {
-      final_brain.evaluate(test_input, output);
-      std::cerr << test_input[0] << " " << test_input[1] << " -> "
-                << (int)(output[0] + 0.5f) << std::endl;
+
+    auto final_brain = xor_model.p->get_best_brain();
+    if (final_brain) {
+      std::vector<exfloat> output = {0};
+      for (const auto &[test_input, expected_output] : test_cases) {
+        final_brain->evaluate(test_input, output);
+        std::cerr << test_input[0] << " " << test_input[1] << " -> "
+                  << (int)(output[0] + 0.5f) << std::endl;
+      }
     }
 
     std::cerr << "Training complete after " << xor_model.tick_count.load()

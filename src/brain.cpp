@@ -484,7 +484,8 @@ void brain::apply_hebbian_learning() {
       if (!t.is_learning_enabled())
         continue;
 
-      exfloat pre_activation = neurons[conn.from_neuron].last_activation;
+      // rtNEAT uses current activation (network.cpp:238-284)
+      exfloat pre_activation = neurons[conn.from_neuron].value;
 
       // Get learning parameters from trait
       exfloat hebb_rate = t.params[0];

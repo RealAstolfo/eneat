@@ -62,7 +62,7 @@ int main() {
   };
 
   std::string model_name = "xor";
-  model xor_model(fitness_function, model_name, 2, 1, 100, 1, false);
+  model xor_model(fitness_function, model_name, 2, 1, 1000, 1, true);
   xor_model.p->speciating_parameters.time_alive_minimum = 5;
 
   std::cerr << "Starting evolution (full async)..." << std::endl;
@@ -71,7 +71,7 @@ int main() {
   size_t last_report_tick = 0;
   size_t tick = 0;
 
-  while (xor_model.get_best_fitness() / (exfloat)std::numeric_limits<size_t>::max() < needed_fitness) {
+  while (xor_model.p->max_fitness.load() / (exfloat)std::numeric_limits<size_t>::max() < needed_fitness) {
     // Use tick_async for async evaluation
     auto tick_task = xor_model.tick_async();
     tick_task.start();
@@ -83,7 +83,7 @@ int main() {
       std::cerr << "Tick: " << tick
                 << " Pop: " << xor_model.population_size()
                 << " Species: " << xor_model.p->species.size()
-                << " Fitness: " << xor_model.get_best_fitness() / (exfloat)std::numeric_limits<size_t>::max()
+                << " Fitness: " << xor_model.p->max_fitness.load() / (exfloat)std::numeric_limits<size_t>::max()
                 << std::endl;
     }
     tick++;
@@ -217,18 +217,22 @@ int main() {
   std::cerr << "All coroutine tests passed!" << std::endl;
 
   // Display results
-  std::vector<exfloat> output = {0};
-  brain final_brain = xor_model.get_best_brain();
-
   std::cerr << std::endl;
   std::cerr << "Completed in " << tick << " ticks" << std::endl;
-  std::cerr << "Final fitness: " << xor_model.get_best_fitness() / (exfloat)std::numeric_limits<size_t>::max() << std::endl;
-  std::cerr << "XOR results:" << std::endl;
-  for (const auto &[test_input, expected_output] : test_cases) {
-    final_brain.evaluate(test_input, output);
-    std::cerr << test_input[0] << " XOR " << test_input[1] << " -> "
-              << output[0] << " (expected: " << expected_output << ")"
-              << std::endl;
+  std::cerr << "Final fitness: " << xor_model.p->max_fitness.load() / (exfloat)std::numeric_limits<size_t>::max() << std::endl;
+
+  auto best_brain = xor_model.p->get_best_brain();
+  if (best_brain) {
+    std::vector<exfloat> output = {0};
+    std::cerr << "XOR results:" << std::endl;
+    for (const auto &[test_input, expected_output] : test_cases) {
+      best_brain->evaluate(test_input, output);
+      std::cerr << test_input[0] << " XOR " << test_input[1] << " -> "
+                << output[0] << " (expected: " << expected_output << ")"
+                << std::endl;
+    }
+  } else {
+    std::cerr << "No best brain available (no evolution occurred)" << std::endl;
   }
 
   return 0;

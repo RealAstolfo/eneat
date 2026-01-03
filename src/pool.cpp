@@ -96,6 +96,10 @@ void pool::set_genome_fitness(size_t species_idx, size_t genome_idx, size_t fitn
       g[genome_idx].fitness.store(fitness);
     }
   });
+
+  // Check if this is a new best genome
+  genome copy = get_genome_copy(species_idx, genome_idx);
+  update_best_genome(copy);
 }
 
 void pool::increment_genome_age(size_t species_idx, size_t genome_idx) {
@@ -326,6 +330,10 @@ ethreads::coro_task<void> pool::mutate_weight(genome &g) {
       it->second.weight = eneat::get_rand(real_distributor) * 4.0f - 2.0f;
     }
 
+    // Clamp weight to rtNEAT limits (genome.cpp:1262-1263)
+    if (it->second.weight > 8.0f) it->second.weight = 8.0f;
+    else if (it->second.weight < -8.0f) it->second.weight = -8.0f;
+
     // Track mutation for compatibility distance calculation
     it->second.mutation_num += 1.0f;
   }
@@ -498,7 +506,8 @@ ethreads::coro_task<void> pool::mutate_link(genome &g, const bool &force_bias) {
     std::uniform_real_distribution<exfloat> weight_generator(0.0f, 1.0f);
     std::uniform_int_distribution<size_t> act_generator(ai_func_type::FIRST,
                                                         ai_func_type::LAST);
-    new_gene.weight = eneat::get_rand(weight_generator) * 4.0f - 2.0f;
+    // rtNEAT uses [-1, 1] range (genome.cpp:1758)
+    new_gene.weight = eneat::get_rand(weight_generator) * 2.0f - 1.0f;
     new_gene.activation = (ai_func_type)eneat::get_rand(act_generator);
     g.genes[new_gene.innovation_num] = new_gene;
     co_return;  // Success - exit after adding gene
@@ -913,6 +922,10 @@ void pool::mutate_weight_only(genome &g) {
       gene.weight = eneat::get_rand(dist) * 4.0f - 2.0f;
     }
     // else: no change to this gene
+
+    // Clamp weight to rtNEAT limits (genome.cpp:1262-1263)
+    if (gene.weight > 8.0f) gene.weight = 8.0f;
+    else if (gene.weight < -8.0f) gene.weight = -8.0f;
 
     gene.mutation_num += 1.0f;
     num++;
@@ -1351,7 +1364,20 @@ void pool::estimate_all_averages() {
     if (count > 0) {
       s.average_est.store(sum / count);
     } else {
-      s.average_est.store(0);
+      // rtNEAT fallback: if no mature organisms, use ALL organisms (species.cpp:152-156)
+      size_t fallback_sum = 0;
+      size_t fallback_count = 0;
+      s.genomes.modify([&](const std::vector<genome>& gs) {
+        for (const auto &g : gs) {
+          fallback_sum += g.fitness.load();
+          fallback_count++;
+        }
+      });
+      if (fallback_count > 0) {
+        s.average_est.store(fallback_sum / fallback_count);
+      } else {
+        s.average_est.store(0);
+      }
     }
   }
 }
@@ -2161,6 +2187,43 @@ bool pool::verify_genome(const genome& g) const {
   return true;
 }
 
+// Best genome tracking - thread-safe access to all-time best performer
+
+std::optional<genome> pool::get_best_genome() const {
+  std::shared_lock lock(best_genome_mutex);
+  return best_genome_ever;
+}
+
+void pool::update_best_genome(const genome& g) {
+  size_t fitness = g.fitness.load();
+
+  // Check current max without exclusive lock first (fast path)
+  if (fitness <= max_fitness.load()) {
+    return;
+  }
+
+  // Need exclusive lock to update
+  std::unique_lock lock(best_genome_mutex);
+
+  // Double-check after acquiring lock (another thread may have updated)
+  if (fitness > max_fitness.load()) {
+    max_fitness.store(fitness);
+    best_genome_ever = g;  // Deep copy via genome copy constructor
+  }
+}
+
+std::optional<brain> pool::get_best_brain() const {
+  std::shared_lock lock(best_genome_mutex);
+  if (!best_genome_ever) {
+    return std::nullopt;
+  }
+
+  brain b;
+  b = *best_genome_ever;  // Build brain from genome
+  b.flush();              // Reset to clean state for deterministic evaluation
+  return b;
+}
+
 std::istream &operator>>(std::istream &input, pool &p) {
   size_t innovation_num;
   input >> innovation_num;
@@ -2169,6 +2232,35 @@ std::istream &operator>>(std::istream &input, pool &p) {
   input >> reserved;  // Reserved for backwards compatibility (was generation_number)
   input >> max_fit;
   p.max_fitness.store(max_fit);
+
+  // Deserialize best genome if present
+  int has_best;
+  input >> has_best;
+  if (has_best) {
+    genome best(p.network_info, p.mutation_rates);
+    size_t tmp_fitness, tmp_adjusted_fitness, tmp_global_rank;
+    input >> tmp_fitness >> tmp_adjusted_fitness >> tmp_global_rank;
+    best.fitness.store(tmp_fitness);
+    best.adjusted_fitness.store(tmp_adjusted_fitness);
+    best.global_rank.store(tmp_global_rank);
+    input >> best.mutation_rates;
+    size_t gene_number;
+    input >> best.max_neuron >> gene_number;
+    for (size_t j = 0; j < gene_number; j++) {
+      gene new_gene;
+      input >> new_gene.innovation_num >> new_gene.from_node >> new_gene.to_node
+            >> new_gene.weight >> new_gene.enabled;
+      int activation;
+      input >> activation;
+      new_gene.activation = (ai_func_type)activation;
+      input >> new_gene.is_bias_source;
+      best.genes[new_gene.innovation_num] = new_gene;
+    }
+    p.best_genome_ever = best;
+  } else {
+    p.best_genome_ever.reset();
+  }
+
   input >> p.network_info.input_size >> p.network_info.output_size >>
       p.network_info.bias_size;
   p.network_info.functional_neurons = p.network_info.input_size +
@@ -2231,6 +2323,23 @@ std::ostream &operator<<(std::ostream &output, pool &p) {
   output << p.innovation_chan.number() << std::endl;
   output << 0 << std::endl;  // Reserved for backwards compatibility (was generation_number)
   output << p.max_fitness.load() << std::endl;
+
+  // Serialize best genome if present
+  output << (p.best_genome_ever.has_value() ? 1 : 0) << std::endl;
+  if (p.best_genome_ever) {
+    genome best = *p.best_genome_ever;  // Copy (mutation_rates << needs non-const)
+    output << best.fitness.load() << " " << best.adjusted_fitness.load() << " "
+           << best.global_rank.load() << std::endl;
+    output << best.mutation_rates;
+    output << best.max_neuron << " " << best.genes.size() << std::endl;
+    for (const auto& pair : best.genes) {
+      const gene& g = pair.second;
+      output << g.innovation_num << " " << g.from_node << " " << g.to_node << " "
+             << g.weight << " " << g.enabled << " " << g.activation << " "
+             << g.is_bias_source << std::endl;
+    }
+  }
+
   output << p.network_info.input_size << " " << p.network_info.output_size
          << " " << p.network_info.bias_size << std::endl;
   output << p.network_info.recurrent << std::endl;

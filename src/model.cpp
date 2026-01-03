@@ -32,8 +32,6 @@ model::model(
   load_best(this->model_name + "_best");
 
   srand(time(NULL));
-  this->p->max_fitness.store(
-      std::numeric_limits<size_t>::max());
 }
 
 model::~model() {

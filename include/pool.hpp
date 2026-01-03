@@ -5,11 +5,14 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <random>
+#include <shared_mutex>
 #include <stdbool.h>
 #include <utility>
 #include <vector>
 
+#include "brain.hpp"
 #include "coro_task.hpp"
 #include "innovation_channel.hpp"
 #include "mutation_rate_container.hpp"
@@ -46,6 +49,11 @@ struct pool {
   std::unique_ptr<eneat::species_channel> species_chan;
 
   ethreads::sync_shared_value<size_t, ethreads::mutex_lock_policy> max_fitness{0};
+
+  // Best genome tracking - stores the all-time best performing genome
+  std::optional<genome> best_genome_ever;
+  mutable std::shared_mutex best_genome_mutex;
+
   mutation_rate_container mutation_rates;
   speciating_parameter_container speciating_parameters;
   network_info_container network_info;
@@ -173,6 +181,18 @@ struct pool {
 
   // Genome verification (debug/validation)
   bool verify_genome(const genome& g) const;
+
+  // Best genome tracking - thread-safe access to all-time best performer
+  // Get a copy of the best genome (thread-safe)
+  std::optional<genome> get_best_genome() const;
+
+  // Check and update best genome if fitness is higher (thread-safe)
+  void update_best_genome(const genome& g);
+
+  // Build a brain from the best genome for deterministic evaluation
+  // Returns nullopt if no best genome exists
+  // The returned brain is flushed (clean state) for deterministic reproduction
+  std::optional<brain> get_best_brain() const;
 };
 
 std::istream &operator>>(std::istream &input, pool &p);
