@@ -2224,6 +2224,69 @@ std::optional<brain> pool::get_best_brain() const {
   return b;
 }
 
+// rtNEAT iteration step: remove -> estimate -> reproduce (call-based, decoupled from evaluation)
+// Reference: nero_evolution.cpp evolveBrains()
+// Key insight: rtNEAT does removal FIRST, then estimates averages, then reproduces
+bool pool::iteration_step() {
+  // Step 1: Remove worst mature organism (rtNEAT does this FIRST)
+  bool removed = remove_worst();
+
+  if (!removed) {
+    return false;  // No mature organisms to remove
+  }
+
+  // Step 2: Estimate all species averages (AFTER removal, before reproduction)
+  estimate_all_averages();
+
+  // Step 3: Periodic generational features (every 10 iterations)
+  if (iteration_count_ % 10 == 0) {
+    // Adjust fitness with age penalties and fitness sharing
+    for (auto& s : species) {
+      adjust_species_fitness(s);
+    }
+
+    // Calculate expected offspring proportionally
+    calculate_expected_offspring();
+
+    // Redistribute offspring from weak to strong species (babies stolen)
+    redistribute_offspring();
+
+    // Check for population stagnation and apply delta-coding if needed
+    check_delta_coding();
+  }
+
+  // Step 4: Produce one offspring from selected species
+  genome child = reproduce_one();
+  add_to_species(std::move(child));
+
+  // Step 5: Track iteration count for periodic operations
+  iteration_count_++;
+
+  // Step 6: Periodic compatibility threshold adjustment + species reassignment
+  size_t compat_frequency = std::max(1UL, get_population_size() / 10);
+  if (iteration_count_ % compat_frequency == 0) {
+    adjust_compatibility_threshold();
+    // Note: adjust_compatibility_threshold already calls reassign_all_species() internally
+  }
+
+  // Step 7: Per-generation operations (once per population_size iterations)
+  if (iteration_count_ % speciating_parameters.population == 0) {
+    for (auto& s : species) {
+      s.increment_age();
+    }
+    reset_champion_flags();
+  }
+
+  // Step 8: Periodic species cleanup (every 10 generations)
+  size_t cleanup_period = speciating_parameters.population * 10;
+  if (iteration_count_ > 0 && iteration_count_ % cleanup_period == 0) {
+    remove_stale_species();
+    remove_weak_species();
+  }
+
+  return true;
+}
+
 std::istream &operator>>(std::istream &input, pool &p) {
   size_t innovation_num;
   input >> innovation_num;

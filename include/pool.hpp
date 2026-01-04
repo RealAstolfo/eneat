@@ -154,6 +154,13 @@ struct pool {
 
   // rtNEAT reference features
 
+  // Iteration counter for periodic operations
+  size_t iteration_count_ = 0;
+
+  // rtNEAT iteration step: remove -> estimate -> reproduce (call-based, decoupled from evaluation)
+  // Returns true if an organism was replaced, false if no mature organisms to remove
+  bool iteration_step();
+
   // Delta-coding: emergency diversity injection when population stagnates
   size_t highest_fitness_ever = 0;
   size_t generations_since_improvement = 0;

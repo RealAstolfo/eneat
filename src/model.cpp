@@ -52,6 +52,69 @@ ethreads::coro_task<size_t> model::evaluate_genome_copy_async(genome g) {
   co_return fitness;
 }
 
+// === rtNEAT-style decoupled evolution ===
+
+// Evaluate batch of genomes in parallel (no replacement - decoupled from evolution)
+// Use this for real-time evaluation where evolution timing is controlled separately
+ethreads::coro_task<void> model::evaluate_batch_async() {
+  // Get genome indices (safe - indices remain valid across co_await)
+  auto indices = p->get_genome_indices();
+  if (indices.empty()) {
+    co_return;
+  }
+
+  // Determine batch size for this evaluation
+  size_t pop_size = indices.size();
+  size_t batch = std::min(batch_size_, pop_size);
+
+  // Prepare batch evaluation
+  eval_index_ = eval_index_ % pop_size;
+
+  // Collect genome copies and create tasks
+  std::vector<ethreads::coro_task<size_t>> tasks;
+  std::vector<std::pair<size_t, size_t>> batch_indices;
+  tasks.reserve(batch);
+  batch_indices.reserve(batch);
+
+  for (size_t i = 0; i < batch; i++) {
+    size_t idx = (eval_index_ + i) % pop_size;
+    auto [species_idx, genome_idx] = indices[idx];
+    batch_indices.push_back({species_idx, genome_idx});
+
+    // Get a COPY of the genome (safe to use across co_await)
+    genome g = p->get_genome_copy(species_idx, genome_idx);
+    tasks.push_back(evaluate_genome_copy_async(std::move(g)));
+  }
+
+  // Start all evaluation tasks in parallel
+  for (auto& task : tasks) {
+    task.start();
+  }
+
+  // Wait for all evaluations and update original genomes
+  for (size_t i = 0; i < batch; i++) {
+    size_t fitness = co_await tasks[i];
+    auto [species_idx, genome_idx] = batch_indices[i];
+
+    // Update original genome's fitness and age (thread-safe via pool methods)
+    p->set_genome_fitness(species_idx, genome_idx, fitness);
+    p->increment_genome_age(species_idx, genome_idx);
+  }
+
+  eval_index_ = (eval_index_ + batch) % pop_size;
+
+  co_return;
+}
+
+// rtNEAT iteration step: remove -> estimate -> reproduce (call-based)
+// Reference: nero_evolution.cpp evolveBrains()
+// Key insight: rtNEAT does removal FIRST, then estimates averages, then reproduces
+bool model::iteration_step() {
+  return p->iteration_step();
+}
+
+// === Combined evaluation + evolution (backward compatible) ===
+
 // Single tick of rtNEAT evolution with safe parallel evaluation
 ethreads::coro_task<void> model::tick_async() {
   // Get genome indices (safe - indices remain valid across co_await)

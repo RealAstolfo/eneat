@@ -114,17 +114,23 @@ int main() {
 
   std::string model_name = "sine";
   // 1 input, 1 output, 100 population, 1 bias, non-recurrent
-  model sine_model(fitness_function, model_name, 1, 1, 100, 1, false);
+  model sine_model(fitness_function, model_name, 1, 1, 1000, 1, true);
 
-  // Configure for diverse activation functions
+  // Configure mutation rates for function approximation
   auto& rates = sine_model.p->mutation_rates;
-  rates.activation_mutation_chance = 0.2f;  // High chance for diverse activations
-  rates.link_mutation_chance = 0.2f;
-  rates.neuron_mutation_chance = 0.02f;
+  rates.connection_mutate_chance = 0.9f;    // High weight mutation for fine-tuning
+  rates.step_size = 2.0f;                   // Weight adjustment power
+  rates.activation_mutation_chance = 0.15f; // Diverse activations
+  rates.link_mutation_chance = 0.3f;        // More connections for complexity
+  rates.neuron_mutation_chance = 0.05f;     // Need hidden neurons for sine
 
   auto& params = sine_model.p->speciating_parameters;
-  params.population = 100;
-  params.target_species_count = 8;
+  params.population = 1000;
+  params.delta_coding_enabled = true;        // Enable delta coding for stagnation recovery
+  params.dynamic_threshold_enabled = true;   // Dynamic compatibility threshold
+  params.target_species_count = 15;          // Target species for diversity
+  params.compat_adjust_frequency = 5;        // Adjust threshold more frequently
+  params.dropoff_age = 50;                   // Faster species turnover
 
   // === Visualization setup ===
   NetworkVisualizer visualizer(1600, 1000);
@@ -148,7 +154,7 @@ int main() {
 
   // Training task (runs in background)
   auto training_task = [&]() -> ethreads::coro_task<void> {
-    constexpr float target_fitness = 0.9f;
+    constexpr float target_fitness = 0.99f;
 
     while (!should_exit.load() &&
            sine_model.p->max_fitness.load() / (exfloat)std::numeric_limits<size_t>::max() < target_fitness) {
@@ -190,11 +196,13 @@ int main() {
   std::cerr << "Training started. Visualizing..." << std::endl;
   std::cerr << std::endl;
 
-  // Get initial brain
+  // Get initial brain and cache for stable rendering
+  brain cached_render_brain;
   {
     auto best = sine_model.p->get_best_brain();
     if (best) {
       best_brain_copy.store(*best);
+      cached_render_brain = *best;
     }
   }
 
@@ -230,82 +238,72 @@ int main() {
       override_value.store(1.0f - (mouse_y / height));  // Invert so up = higher value
     }
 
-    // Check for brain update
+    // Check for brain update - only update cached brain when signaled
     if (update_ready.try_wait()) {
-      // Brain was updated, will be rendered in next frame
+      cached_render_brain = best_brain_copy.load();
     }
 
-    // Get current brain copy for rendering
-    brain render_brain = best_brain_copy.load();
-
     // Apply override if active
-    if (override_active.load() && !render_brain.output_neurons.empty()) {
+    if (override_active.load() && !cached_render_brain.output_neurons.empty()) {
       std::vector<exfloat> override_vals = {static_cast<exfloat>(override_value.load())};
-      render_brain.override_outputs(override_vals);
+      cached_render_brain.override_outputs(override_vals);
     } else {
-      render_brain.clear_overrides();
+      cached_render_brain.clear_overrides();
     }
 
     // Run a sample evaluation to update activations for visualization
     std::vector<exfloat> test_output(1, 0.0f);
     float test_x = std::fmod(static_cast<float>(current_tick.load()) * 0.01f, 1.0f);
     std::vector<exfloat> test_input = {static_cast<exfloat>(test_x)};
-    render_brain.evaluate(test_input, test_output);
+    cached_render_brain.evaluate(test_input, test_output);
 
     // Begin rendering
     BeginDrawing();
-    ClearBackground(RAYWHITE);
+    ClearBackground(Color{30, 30, 30, 255});  // Dark background to match visualizer
 
-    // Render network
-    visualizer.render(render_brain);
+    // Render network (without Begin/EndDrawing since we're managing the frame)
+    visualizer.render_network_only(cached_render_brain);
 
-    // Draw status information
-    int y_offset = 10;
-
-    // Tick and fitness
+    // Draw status information (positioned to not overlap with network visualizer legend)
+    int status_x = 10;
+    int status_y = GetScreenHeight() - 320;  // Above the graph
     char status[256];
+
     snprintf(status, sizeof(status), "Tick: %zu | Fitness: %.2f%%",
              current_tick.load(), current_fitness.load() * 100.0f);
-    DrawText(status, 10, y_offset, 20, DARKGRAY);
-    y_offset += 25;
+    DrawText(status, status_x, status_y, 16, LIGHTGRAY);
+    status_y += 20;
 
-    // Population info
-    snprintf(status, sizeof(status), "Population: %zu | Species: %zu",
-             sine_model.population_size(), sine_model.p->species.size());
-    DrawText(status, 10, y_offset, 16, GRAY);
-    y_offset += 20;
+    snprintf(status, sizeof(status), "Population: %zu | Species: %zu | Neurons: %zu",
+             sine_model.population_size(), sine_model.p->species.size(),
+             cached_render_brain.neurons.size());
+    DrawText(status, status_x, status_y, 14, GRAY);
+    status_y += 18;
 
-    // Network info
-    snprintf(status, sizeof(status), "Neurons: %zu | outputs_ready: %s",
-             render_brain.neurons.size(),
-             render_brain.outputs_ready() ? "YES" : "NO");
-    DrawText(status, 10, y_offset, 16, GRAY);
-    y_offset += 25;
-
-    // Override status
     if (override_active.load()) {
-      snprintf(status, sizeof(status), "OVERRIDE ACTIVE: %.2f", override_value.load());
-      DrawText(status, 10, y_offset, 18, RED);
+      snprintf(status, sizeof(status), "OVERRIDE: %.2f (O to toggle)", override_value.load());
+      DrawText(status, status_x, status_y, 14, RED);
     } else {
-      DrawText("Override: OFF (press O to toggle)", 10, y_offset, 16, LIGHTGRAY);
+      DrawText("O: Toggle override | R: Reset | SPACE: Pause", status_x, status_y, 12, DARKGRAY);
     }
-    y_offset += 25;
+    status_y += 18;
 
-    // Pause status
     if (paused.load()) {
-      DrawText("PAUSED (press SPACE to resume)", 10, y_offset, 18, ORANGE);
+      DrawText("PAUSED", status_x, status_y, 16, ORANGE);
     }
 
-    // Current test point visualization
+    // Sine approximation graph (bottom-left, with proper margins)
     int graph_x = 10;
-    int graph_y = GetScreenHeight() - 150;
-    int graph_w = 300;
-    int graph_h = 120;
+    int graph_y = GetScreenHeight() - 140;
+    int graph_w = 280;
+    int graph_h = 100;
 
+    // Background for graph
+    DrawRectangle(graph_x - 2, graph_y - 22, graph_w + 4, graph_h + 40, Color{20, 20, 20, 200});
     DrawRectangleLines(graph_x, graph_y, graph_w, graph_h, LIGHTGRAY);
-    DrawText("Sine Approximation", graph_x, graph_y - 20, 14, DARKGRAY);
+    DrawText("Sine Approximation", graph_x, graph_y - 18, 12, LIGHTGRAY);
 
-    // Draw actual sine wave
+    // Draw actual sine wave (blue)
     for (int i = 0; i < graph_w - 1; i++) {
       float x1 = static_cast<float>(i) / graph_w;
       float x2 = static_cast<float>(i + 1) / graph_w;
@@ -321,20 +319,27 @@ int main() {
       );
     }
 
-    // Draw network's approximation
+    // Draw network's approximation (red) - use a fresh copy with clean state
+    brain graph_brain = cached_render_brain;
+    graph_brain.reset_state();     // Ensure clean state for evaluation
+    graph_brain.clear_overrides(); // Remove any overrides
+
+    // Pre-evaluate all points for smooth rendering
+    std::vector<float> net_outputs(graph_w);
+    std::vector<exfloat> out(1);
+    for (int i = 0; i < graph_w; i++) {
+      float x = static_cast<float>(i) / graph_w;
+      graph_brain.evaluate({static_cast<exfloat>(x)}, out);
+      net_outputs[i] = static_cast<float>(out[0]);
+    }
+
+    // Draw the approximation curve
     for (int i = 0; i < graph_w - 1; i++) {
-      float x1 = static_cast<float>(i) / graph_w;
-      float x2 = static_cast<float>(i + 1) / graph_w;
-
-      std::vector<exfloat> out1(1), out2(1);
-      render_brain.evaluate({static_cast<exfloat>(x1)}, out1);
-      render_brain.evaluate({static_cast<exfloat>(x2)}, out2);
-
       DrawLine(
         graph_x + i,
-        graph_y + graph_h - static_cast<int>(static_cast<float>(out1[0]) * graph_h),
+        graph_y + graph_h - static_cast<int>(net_outputs[i] * graph_h),
         graph_x + i + 1,
-        graph_y + graph_h - static_cast<int>(static_cast<float>(out2[0]) * graph_h),
+        graph_y + graph_h - static_cast<int>(net_outputs[i + 1] * graph_h),
         RED
       );
     }
@@ -342,23 +347,10 @@ int main() {
     // Draw current test point
     int test_px = graph_x + static_cast<int>(test_x * graph_w);
     int test_py = graph_y + graph_h - static_cast<int>(static_cast<float>(test_output[0]) * graph_h);
-    DrawCircle(test_px, test_py, 5, GREEN);
+    DrawCircle(test_px, test_py, 4, GREEN);
 
     // Legend
-    DrawText("Blue: sin(x)  Red: Network  Green: Current", graph_x, graph_y + graph_h + 5, 12, GRAY);
-
-    // Draw activation function legend
-    int legend_x = GetScreenWidth() - 150;
-    int legend_y = 10;
-    DrawText("Activation Types:", legend_x, legend_y, 14, DARKGRAY);
-    legend_y += 20;
-
-    const char* act_names[] = {"ReLU", "Linear", "Step", "Logistic", "Sigmoid",
-                               "Tanh", "GELU", "Swish", "LReLU", "Norm"};
-    for (int i = 0; i < 10; i++) {
-      DrawText(act_names[i], legend_x, legend_y, 12, GRAY);
-      legend_y += 15;
-    }
+    DrawText("Blue=sin(x) Red=Network", graph_x, graph_y + graph_h + 4, 10, GRAY);
 
     EndDrawing();
 

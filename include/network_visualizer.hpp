@@ -21,6 +21,7 @@ public:
 
     // Rendering
     void render(const brain& net);
+    void render_network_only(const brain& net);  // Render without Begin/EndDrawing (for custom UI)
     void update();
 
     // Optional callback for drawing labels on neurons

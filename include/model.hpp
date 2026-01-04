@@ -20,6 +20,19 @@ struct model {
         size_t bias = 1, bool recurrent = false);
   ~model();
 
+  // === rtNEAT-style decoupled evolution ===
+
+  // Evaluate batch of genomes in parallel (no replacement - decoupled from evolution)
+  // Use this for real-time evaluation where evolution timing is controlled separately
+  ethreads::coro_task<void> evaluate_batch_async();
+
+  // rtNEAT iteration step: remove -> estimate -> reproduce (call-based)
+  // Returns true if an organism was replaced, false if no mature organisms to remove
+  // Reference: nero_evolution.cpp evolveBrains() - key insight: removal happens FIRST
+  bool iteration_step();
+
+  // === Combined evaluation + evolution (convenience) ===
+
   // Single tick of evolution: evaluate batch in parallel, replace worst if at capacity
   ethreads::coro_task<void> tick_async();
 

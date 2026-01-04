@@ -365,16 +365,13 @@ std::vector<NetworkVisualizer::NodePos> NetworkVisualizer::compute_layout(const 
     return positions;
 }
 
-void NetworkVisualizer::render(const brain& net) {
+void NetworkVisualizer::render_network_only(const brain& net) {
     if (!window_open_) return;
 
     // Force window to stay at fixed size
     if (GetScreenWidth() != width_ || GetScreenHeight() != height_) {
         SetWindowSize(width_, height_);
     }
-
-    BeginDrawing();
-    ClearBackground(Color{30, 30, 30, 255}); // Dark background
 
     float scale = 1.0f;
     auto positions = compute_layout(net, scale);
@@ -486,6 +483,20 @@ void NetworkVisualizer::render(const brain& net) {
             label_callback_(i, positions[i].x, positions[i].y, net.neurons[i]);
         }
     }
+}
+
+void NetworkVisualizer::render(const brain& net) {
+    if (!window_open_) return;
+
+    // Force window to stay at fixed size
+    if (GetScreenWidth() != width_ || GetScreenHeight() != height_) {
+        SetWindowSize(width_, height_);
+    }
+
+    BeginDrawing();
+    ClearBackground(Color{30, 30, 30, 255}); // Dark background
+
+    render_network_only(net);
 
     EndDrawing();
 }
