@@ -303,12 +303,7 @@ void brain::evaluate_nonrecurrent(const std::vector<exfloat> &input,
 
 void brain::evaluate_recurrent(const std::vector<exfloat> &input,
                                std::vector<exfloat> &output) {
-  // Shift activation history: last_activation2 = last_activation, last_activation = current
-  for (size_t i = 0; i < neurons.size(); i++) {
-    neurons[i].last_activation2 = neurons[i].last_activation;
-    neurons[i].last_activation = neurons[i].value;
-  }
-
+  // Load inputs once (sensors don't shift history in the loop)
   for (size_t i = 0; i < input.size() && i < input_neurons.size(); i++) {
     neurons[input_neurons[i]].value = input[i];
     neurons[input_neurons[i]].visited = true;
@@ -319,27 +314,47 @@ void brain::evaluate_recurrent(const std::vector<exfloat> &input,
     neurons[bias_neurons[i]].visited = true;
   }
 
-  for (size_t i = 0; i < neurons.size(); i++) {
-    exfloat sum = 0.0f;
-    for (size_t j = 0; j < neurons[i].in_connections.size(); j++) {
-      const auto& conn = neurons[i].in_connections[j];
-      exfloat input_activation;
+  // Loop until outputs are ready or abort limit reached
+  // Reference: rtNEAT network.cpp:161 - while(outputsoff()||!onetime)
+  int abort_count = 0;
+  bool onetime = false;
 
-      // Time-delayed connections use last_activation (t-1 for normal, t-2 for time-delayed)
-      // rtNEAT's get_active_out_td() returns last_activation if activation_count > 1
-      if (conn.is_time_delayed) {
-        // Time-delayed: use activation from two timesteps ago
-        input_activation = (neurons[conn.from_neuron].activation_count > 1)
-            ? neurons[conn.from_neuron].last_activation
-            : 0.0f;
-      } else {
-        // Normal connection: use current value
-        input_activation = neurons[conn.from_neuron].value;
+  while (!outputs_ready() || !onetime) {
+    if (++abort_count > 20) {
+      break;  // Prevent infinite loop if outputs disconnected
+    }
+
+    // Activate all non-sensor neurons
+    for (size_t i = 0; i < neurons.size(); i++) {
+      // Skip sensors (input/bias) - they don't activate from connections
+      if (neurons[i].type == INPUT || neurons[i].type == BIAS) continue;
+      if (neurons[i].in_connections.empty()) continue;
+
+      // Compute sum of incoming activations
+      exfloat sum = 0.0f;
+      for (size_t j = 0; j < neurons[i].in_connections.size(); j++) {
+        const auto& conn = neurons[i].in_connections[j];
+        exfloat input_activation;
+
+        // Time-delayed connections use last_activation (t-1 for normal, t-2 for time-delayed)
+        // rtNEAT's get_active_out_td() returns last_activation if activation_count > 1
+        if (conn.is_time_delayed) {
+          input_activation = (neurons[conn.from_neuron].activation_count > 1)
+              ? neurons[conn.from_neuron].last_activation
+              : 0.0f;
+        } else {
+          input_activation = neurons[conn.from_neuron].value;
+        }
+
+        sum += input_activation * conn.weight;
       }
 
-      sum += input_activation * conn.weight;
-    }
-    if (neurons[i].in_connections.size() > 0) {
+      // Shift activation history before computing new activation
+      // Reference: rtNEAT network.cpp:213-214
+      neurons[i].last_activation2 = neurons[i].last_activation;
+      neurons[i].last_activation = neurons[i].value;
+
+      // Apply activation function
       switch (neurons[i].activation_function) {
       case RELU:
         neurons[i].value = relu(sum);
@@ -372,11 +387,14 @@ void brain::evaluate_recurrent(const std::vector<exfloat> &input,
         neurons[i].value = normalize(sum, neurons[i].value);
         break;
       }
+
+      neurons[i].activation_count += 1.0f;
     }
-    neurons[i].activation_count += 1.0f;
+
+    onetime = true;
   }
 
-  // Apply Hebbian learning if enabled
+  // Apply Hebbian learning if enabled (once after all activations)
   if (hebbian_enabled) {
     apply_hebbian_learning();
   }
@@ -606,4 +624,24 @@ bool brain::outputs_ready() const {
     }
   }
   return true;
+}
+
+// Debug: Get fingerprint of brain structure and weights
+std::string brain::fingerprint() const {
+  size_t h = neurons.size();
+  double weight_sum = 0.0;
+  size_t conn_count = 0;
+  for (const auto& n : neurons) {
+    h = h * 31 + n.in_connections.size();
+    for (const auto& c : n.in_connections) {
+      weight_sum += c.weight;
+      conn_count++;
+      h = h * 31 + c.from_neuron;
+    }
+  }
+  std::ostringstream ss;
+  ss << "n=" << neurons.size() << " c=" << conn_count
+     << " w=" << std::fixed << std::setprecision(4) << weight_sum
+     << " h=" << std::hex << h;
+  return ss.str();
 }

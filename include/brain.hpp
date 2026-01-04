@@ -2,11 +2,14 @@
 #define ENEAT_BRAIN_HPP
 
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <ostream>
+#include <sstream>
 #include <stack>
 #include <stddef.h>
 #include <streambuf>
+#include <string>
 #include <vector>
 
 #include "functions.hpp"
@@ -68,6 +71,9 @@ struct brain {
 
   // Check if network has finished activating (all outputs have values)
   bool outputs_ready() const;
+
+  // Debug: Get fingerprint of brain structure and weights
+  std::string fingerprint() const;
 };
 
 std::istream &operator>>(std::istream &input, brain &b);
