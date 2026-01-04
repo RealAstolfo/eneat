@@ -2307,6 +2307,13 @@ std::istream &operator>>(std::istream &input, pool &p) {
     best.adjusted_fitness.store(tmp_adjusted_fitness);
     best.global_rank.store(tmp_global_rank);
     input >> best.mutation_rates;
+    // Deserialize traits for best genome
+    size_t trait_count;
+    input >> trait_count;
+    best.traits.resize(trait_count);
+    for (size_t t = 0; t < trait_count; t++) {
+      input >> best.traits[t];
+    }
     size_t gene_number;
     input >> best.max_neuron >> gene_number;
     for (size_t j = 0; j < gene_number; j++) {
@@ -2317,6 +2324,7 @@ std::istream &operator>>(std::istream &input, pool &p) {
       input >> activation;
       new_gene.activation = (ai_func_type)activation;
       input >> new_gene.is_bias_source;
+      input >> new_gene.trait_id;
       best.genes[new_gene.innovation_num] = new_gene;
     }
     p.best_genome_ever = best;
@@ -2356,6 +2364,13 @@ std::istream &operator>>(std::istream &input, pool &p) {
       new_genome.adjusted_fitness.store(tmp_adjusted_fitness);
       new_genome.global_rank.store(tmp_global_rank);
       input >> new_genome.mutation_rates;
+      // Deserialize traits
+      size_t trait_count;
+      input >> trait_count;
+      new_genome.traits.resize(trait_count);
+      for (size_t t = 0; t < trait_count; t++) {
+        input >> new_genome.traits[t];
+      }
       size_t gene_number;
       input >> new_genome.max_neuron >> gene_number;
       for (size_t j = 0; j < gene_number; j++) {
@@ -2369,6 +2384,7 @@ std::istream &operator>>(std::istream &input, pool &p) {
         input >> activation;
         new_gene.activation = (ai_func_type)activation;
         input >> new_gene.is_bias_source;
+        input >> new_gene.trait_id;
         new_genome.genes[new_gene.innovation_num] = new_gene;
       }
 
@@ -2394,12 +2410,17 @@ std::ostream &operator<<(std::ostream &output, pool &p) {
     output << best.fitness.load() << " " << best.adjusted_fitness.load() << " "
            << best.global_rank.load() << std::endl;
     output << best.mutation_rates;
+    // Serialize traits for best genome
+    output << best.traits.size() << std::endl;
+    for (const auto& trait : best.traits) {
+      output << trait << std::endl;
+    }
     output << best.max_neuron << " " << best.genes.size() << std::endl;
     for (const auto& pair : best.genes) {
       const gene& g = pair.second;
       output << g.innovation_num << " " << g.from_node << " " << g.to_node << " "
              << g.weight << " " << g.enabled << " " << g.activation << " "
-             << g.is_bias_source << std::endl;
+             << g.is_bias_source << " " << g.trait_id << std::endl;
     }
   }
 
@@ -2425,6 +2446,11 @@ std::ostream &operator<<(std::ostream &output, pool &p) {
       output << genomes_copy[i].adjusted_fitness.load() << " ";
       output << genomes_copy[i].global_rank.load() << std::endl;
       output << genomes_copy[i].mutation_rates;
+      // Serialize traits
+      output << "      " << genomes_copy[i].traits.size() << std::endl;
+      for (const auto& trait : genomes_copy[i].traits) {
+        output << "         " << trait << std::endl;
+      }
       output << "      " << genomes_copy[i].max_neuron << " "
              << genomes_copy[i].genes.size() << std::endl;
       for (auto pair : genomes_copy[i].genes) {
@@ -2432,7 +2458,7 @@ std::ostream &operator<<(std::ostream &output, pool &p) {
         output << "         ";
         output << g.innovation_num << " " << g.from_node << " " << g.to_node
                << " " << g.weight << " " << g.enabled << " " << g.activation
-               << " " << g.is_bias_source << std::endl;
+               << " " << g.is_bias_source << " " << g.trait_id << std::endl;
       }
     }
 
