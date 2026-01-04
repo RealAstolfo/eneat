@@ -2227,9 +2227,53 @@ std::optional<brain> pool::get_best_brain() const {
 // rtNEAT iteration step: remove -> estimate -> reproduce (call-based, decoupled from evaluation)
 // Reference: nero_evolution.cpp evolveBrains()
 // Key insight: rtNEAT does removal FIRST, then estimates averages, then reproduces
+// Extended: Dynamic population sizing - expand when under target, contract when over
 bool pool::iteration_step() {
-  // Step 1: Remove worst mature organism (rtNEAT does this FIRST)
-  bool removed = remove_worst();
+  size_t current_pop = get_population_size();
+  size_t target_pop = speciating_parameters.population;
+
+  // Step 1: Population-aware removal
+  // Under target: skip removal to allow growth
+  // At target: remove 1 (standard rtNEAT)
+  // Over target: aggressive removal (remove multiple)
+  bool removed = false;
+  size_t removals_needed = 0;
+
+  if (current_pop > target_pop) {
+    // Over target: aggressive contraction - remove extras plus one more
+    removals_needed = (current_pop - target_pop) + 1;
+    // Cap at 10% of population per iteration to avoid instability
+    removals_needed = std::min(removals_needed, std::max(1UL, current_pop / 10));
+    for (size_t i = 0; i < removals_needed; i++) {
+      if (remove_worst()) {
+        removed = true;
+      } else {
+        break;  // No more mature organisms to remove
+      }
+    }
+  } else if (current_pop >= target_pop) {
+    // At target: standard rtNEAT - remove 1
+    removed = remove_worst();
+  } else {
+    // Under target: skip removal to allow population growth
+    // Still need at least one mature organism to proceed with reproduction
+    // Check if we have any evaluated genomes
+    bool has_evaluated = false;
+    for (const auto& s : species) {
+      auto gs = s.genomes.load();  // Read-only copy
+      for (const auto& g : gs) {
+        if (g.time_alive.load() > 0) {
+          has_evaluated = true;
+          break;
+        }
+      }
+      if (has_evaluated) break;
+    }
+    if (!has_evaluated) {
+      return false;  // No evaluated organisms yet
+    }
+    removed = true;  // Pretend we removed to allow offspring production
+  }
 
   if (!removed) {
     return false;  // No mature organisms to remove
@@ -2255,9 +2299,19 @@ bool pool::iteration_step() {
     check_delta_coding();
   }
 
-  // Step 4: Produce one offspring from selected species
-  genome child = reproduce_one();
-  add_to_species(std::move(child));
+  // Step 4: Produce offspring
+  // Under target: produce multiple offspring to accelerate growth
+  // At/over target: produce 1 (standard rtNEAT)
+  size_t offspring_count = 1;
+  if (current_pop < target_pop) {
+    // Accelerate growth: produce up to 5 offspring per iteration when under target
+    offspring_count = std::min(5UL, target_pop - current_pop);
+  }
+
+  for (size_t i = 0; i < offspring_count; i++) {
+    genome child = reproduce_one();
+    add_to_species(std::move(child));
+  }
 
   // Step 5: Track iteration count for periodic operations
   iteration_count_++;
