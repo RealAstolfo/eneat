@@ -1,0 +1,723 @@
+# ENEAT Concurrency Architecture
+# Async channels, coroutines, and thread safety patterns
+
+direction: down
+
+style: {
+  fill: "#2D2D2D"
+}
+
+title: |md
+  # Async & Concurrency Architecture
+  C++20 Coroutines, Channels, and Thread Safety
+| {
+  style: {
+    fill: "#2D2D2D"
+    font-color: "#E8DCC8"
+    stroke: transparent
+  }
+}
+
+# ============================================================================
+# ETHREADS LIBRARY
+# ============================================================================
+ethreads: ethreads Library (vendors/ethreads/) {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#556B2F"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  coro_task: |md
+    ### coro_task\<T\>
+    **coro_task.hpp**
+    ---
+    C++20 coroutine wrapper
+    ```cpp
+    ethreads::coro_task<void> my_coro() {
+      co_await something;
+      co_return;
+    }
+
+    ethreads::coro_task<size_t> compute() {
+      co_return 42;
+    }
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  channel: |md
+    ### channel\<T\>
+    **channel.hpp**
+    ---
+    Thread-safe MPSC channel
+    ```cpp
+    channel<request> requests_;
+
+    // Send (producer)
+    requests_.send({data});
+
+    // Receive (consumer)
+    auto msg = requests_.try_receive();
+
+    // Check state
+    requests_.empty()
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  events: |md
+    ### Event Primitives
+    **event.hpp**
+    ---
+    ```cpp
+    auto_reset_event
+      // Signal once, auto-reset
+
+    manual_reset_event
+      // Signal stays set
+
+    async_auto_event
+      // Coroutine-awaitable event
+      co_await event;
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  task_scheduler: |md
+    ### task_scheduler
+    **task_scheduler.hpp**
+    ---
+    Thread pool for coroutines
+    ```cpp
+    schedule(task)
+    run_until_complete()
+    hardware_concurrency()
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  yield: |md
+    ### yield
+    **yield.hpp**
+    ---
+    ```cpp
+    co_await ethreads::yield();
+    // Yield to scheduler
+    // Allow other coroutines
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# INNOVATION CHANNEL
+# ============================================================================
+innovation_channel: |md
+  ## innovation_channel
+  **include/innovation_channel.hpp**
+| {
+  style: {
+    fill: "#3D3D3D"
+    stroke: "#A0522D"
+    stroke-width: 3
+    font-color: "#E8DCC8"
+    border-radius: 8
+    shadow: true
+  }
+
+  purpose: |md
+    ### Purpose
+    Lock-free innovation number tracking
+    Single owner processes all requests
+    Eliminates lock contention
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  request_struct: |md
+    ### innovation_request
+    ```cpp
+    struct innovation_request {
+      size_t from_node;
+      size_t to_node;
+      std::function<void(size_t)> callback;
+    };
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  methods: |md
+    ### Methods
+    ```cpp
+    // Async request with callback
+    void request_innovation(from, to, callback)
+
+    // Blocking synchronous request
+    size_t request_innovation_sync(from, to)
+
+    // Coroutine-awaitable request
+    coro_task<size_t> request_innovation_async(
+      from, to)
+
+    // Direct (single-threaded init only)
+    size_t add_gene_direct(from, to)
+
+    // Process pending requests
+    void process_one()
+    void process_all()
+
+    // Service coroutine
+    coro_task<void> run_service()
+    ```
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  internals: |md
+    ### Internals
+    ```cpp
+    innovation_container container_;
+    channel<innovation_request> requests_;
+    manual_reset_event running_{true};
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      stroke-dash: 5
+    }
+  }
+}
+
+# ============================================================================
+# SPECIES CHANNEL
+# ============================================================================
+species_channel: |md
+  ## species_channel
+  **include/species_channel.hpp**
+| {
+  style: {
+    fill: "#3D3D3D"
+    stroke: "#A0522D"
+    stroke-width: 3
+    font-color: "#E8DCC8"
+    border-radius: 8
+    shadow: true
+  }
+
+  purpose: |md
+    ### Purpose
+    Async species management
+    Channel-based speciation requests
+    Avoids race conditions in
+    species list modification
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  operations: |md
+    ### Operations
+    ```cpp
+    add_to_species_async(genome child)
+    // Request speciation via channel
+
+    run_service()
+    // Process speciation requests
+    ```
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# SYNC SHARED VALUE
+# ============================================================================
+sync_patterns: Thread Safety Patterns {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#8B4513"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  sync_shared_value: |md
+    ### sync_shared_value\<T, Policy\>
+    **shared_state.hpp**
+    ---
+    Thread-safe value wrapper
+    ```cpp
+    // Mutex policy (exclusive access)
+    sync_shared_value<size_t, mutex_lock_policy>
+      fitness{0};
+
+    fitness.store(100);
+    size_t f = fitness.load();
+
+    // Shared mutex policy (reader-writer)
+    sync_shared_value<vector<genome>,
+      shared_mutex_lock_policy> genomes{};
+
+    // Modify with lock
+    genomes.modify([](auto& v) {
+      v.push_back(g);
+    });
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  lock_policies: |md
+    ### Lock Policies
+    ```cpp
+    mutex_lock_policy
+      // Uses std::mutex
+      // Exclusive read/write
+
+    shared_mutex_lock_policy
+      // Uses std::shared_mutex
+      // Multiple readers, single writer
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  thread_local_rng: |md
+    ### Thread-Local RNG
+    **pool.hpp**
+    ```cpp
+    namespace eneat {
+      inline thread_local std::mt19937
+        tl_generator{std::random_device{}()};
+
+      template <typename Dist>
+      inline auto get_rand(Dist &d) {
+        return d(tl_generator);
+      }
+    }
+    ```
+    No lock contention for random numbers
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# ASYNC EVOLUTION FLOW
+# ============================================================================
+async_flow: Async Evolution Flow {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#B87333"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  tick_async: |md
+    ### model::tick_async()
+    ```cpp
+    coro_task<void> tick_async() {
+      // 1. Parallel batch evaluation
+      for i in 0..batch_size:
+        spawn evaluate_genome_copy_async()
+
+      // 2. Co_await all evaluations
+      for task in tasks:
+        co_await task
+
+      // 3. Remove worst (probabilistic)
+      p->remove_worst_probabilistic()
+
+      // 4. Reproduce
+      genome child = p->reproduce_one()
+
+      // 5. Add to species
+      p->add_to_species(child)
+    }
+    ```
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+
+  evaluate_async: |md
+    ### evaluate_genome_copy_async()
+    ```cpp
+    coro_task<size_t> evaluate_genome_copy_async(
+      genome g) {
+      // Build brain from genome copy
+      brain b;
+      b = g;
+
+      // Await user fitness function
+      size_t fitness = co_await get_fitness(b);
+
+      // Update fitness (thread-safe)
+      // ...
+
+      co_return fitness;
+    }
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  batch_eval: |md
+    ### Batch Evaluation
+    ```
+    Thread 1: [genome 0, 4, 8, ...]
+    Thread 2: [genome 1, 5, 9, ...]
+    Thread 3: [genome 2, 6, 10, ...]
+    Thread 4: [genome 3, 7, 11, ...]
+
+    Round-robin distribution
+    batch_size = hardware_concurrency
+    ```
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# MUTATION ASYNC FLOW
+# ============================================================================
+mutation_async: Mutation Coroutines {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#CD853F"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  mutate_link_flow: |md
+    ### mutate_link() Flow
+    ```cpp
+    coro_task<void> mutate_link(genome &g) {
+      // Find valid connection
+      from, to = find_valid_nodes()
+
+      // Request innovation (async)
+      size_t inn_num = co_await
+        innovation_chan.request_innovation_async(
+          from, to);
+
+      // Create gene with innovation
+      gene new_gene;
+      new_gene.innovation_num = inn_num;
+      g.genes[inn_num] = new_gene;
+
+      co_return;
+    }
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  mutate_neuron_flow: |md
+    ### mutate_neuron() Flow
+    ```cpp
+    coro_task<void> mutate_neuron(genome &g) {
+      // Select gene to split
+      old_gene = select_random_gene()
+
+      // Request TWO innovations (async)
+      inn1 = co_await
+        innovation_chan.request_innovation_async(
+          old.from, new_neuron);
+
+      inn2 = co_await
+        innovation_chan.request_innovation_async(
+          new_neuron, old.to);
+
+      // Create new genes
+      // ...
+      co_return;
+    }
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  sync_vs_async: |md
+    ### Sync vs Async Mutations
+    ```cpp
+    // During init (single-threaded)
+    mutate_sync(g)
+      // Uses add_gene_direct()
+      // No channel overhead
+
+    // During evolution (multi-threaded)
+    co_await mutate(g)
+      // Uses request_innovation_async()
+      // Proper channel coordination
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# SERVICE COROUTINES
+# ============================================================================
+services: Service Coroutines {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#556B2F"
+    stroke-width: 2
+    stroke-dash: 5
+    font-color: "#D2B48C"
+  }
+
+  innovation_service: |md
+    ### Innovation Service
+    ```cpp
+    coro_task<void> run_service() {
+      while (is_running()) {
+        process_all();
+        co_await yield();
+      }
+    }
+    ```
+    Processes innovation requests
+    Yields to allow other work
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      stroke-dash: 5
+    }
+  }
+
+  species_service: |md
+    ### Species Service
+    ```cpp
+    coro_task<void> run_service() {
+      while (running) {
+        process_speciation_requests();
+        co_await yield();
+      }
+    }
+    ```
+    Handles add_to_species requests
+    Avoids species list races
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      stroke-dash: 5
+    }
+  }
+}
+
+# ============================================================================
+# BEST GENOME TRACKING
+# ============================================================================
+best_tracking: Best Genome Tracking {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#B87333"
+    stroke-width: 2
+    font-color: "#D2B48C"
+  }
+
+  model_tracking: |md
+    ### model (Lock-Free Fitness)
+    ```cpp
+    atomic<size_t> best_fitness_{0};
+    mutex best_brain_mutex_;
+    brain best_brain_;
+
+    void set_best_brain(brain& b, size_t fit) {
+      size_t expected = best_fitness_.load();
+      while (fitness > expected) {
+        if (best_fitness_.compare_exchange_weak(
+            expected, fitness)) {
+          lock_guard lock(best_brain_mutex_);
+          best_brain_ = b;
+          return;
+        }
+      }
+    }
+    ```
+    CAS for fitness comparison
+    Mutex only for brain copy
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+
+  pool_tracking: |md
+    ### pool (Shared Mutex)
+    ```cpp
+    optional<genome> best_genome_ever;
+    mutable shared_mutex best_genome_mutex;
+
+    optional<genome> get_best_genome() const {
+      shared_lock lock(best_genome_mutex);
+      return best_genome_ever;
+    }
+
+    void update_best_genome(genome& g) {
+      unique_lock lock(best_genome_mutex);
+      if (!best_genome_ever or
+          g.fitness > best_genome_ever->fitness) {
+        best_genome_ever = g;
+      }
+    }
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# CONNECTIONS
+# ============================================================================
+
+ethreads.coro_task -> async_flow: "coroutine runtime" {
+  style: { stroke: "#6B8E23"; stroke-width: 2 }
+}
+
+ethreads.channel -> innovation_channel: "uses channel<>" {
+  style: { stroke: "#6B8E23"; stroke-width: 2 }
+}
+
+ethreads.channel -> species_channel: "uses channel<>" {
+  style: { stroke: "#6B8E23"; stroke-width: 2 }
+}
+
+ethreads.events -> innovation_channel: "async_auto_event" {
+  style: { stroke: "#6B8E23"; stroke-width: 2; stroke-dash: 3 }
+}
+
+async_flow -> mutation_async: "spawns mutations" {
+  style: { stroke: "#CD853F"; stroke-width: 2 }
+}
+
+mutation_async -> innovation_channel: "co_await request_innovation" {
+  style: { stroke: "#A0522D"; stroke-width: 2 }
+}
+
+services -> ethreads.task_scheduler: "scheduled by" {
+  style: { stroke: "#6B8E23"; stroke-width: 2; stroke-dash: 3 }
+}
+
+sync_patterns -> best_tracking: "thread safety" {
+  style: { stroke: "#8B4513"; stroke-width: 2; stroke-dash: 3 }
+}

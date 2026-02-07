@@ -1,0 +1,421 @@
+# ENEAT System Architecture
+# High-level component diagram with APIs
+
+direction: right
+
+# Global styling
+style: {
+  fill: "#2D2D2D"
+}
+
+# ============================================================================
+# USER LAYER
+# ============================================================================
+user_layer: User Interface Layer {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  fitness_func: |md
+    ## fitness_func_t
+    ```cpp
+    std::function<
+      coro_task<size_t>(brain&)
+    >
+    ```
+    User-defined evaluation
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      border-radius: 8
+    }
+  }
+}
+
+# ============================================================================
+# MODEL LAYER - High-level API
+# ============================================================================
+model_layer: Model Layer (High-Level API) {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  model: |md
+    ## model
+    **include/model.hpp**
+    ---
+    **Fields:**
+    - `get_fitness: fitness_func_t`
+    - `model_name: string`
+    - `p: unique_ptr<pool>`
+    - `tick_count: sync_shared_value<size_t>`
+    - `best_fitness_: atomic<size_t>`
+    - `best_brain_: brain`
+    - `batch_size_: size_t`
+    ---
+    **Methods:**
+    - `tick_async() -> coro_task<void>`
+    - `evolve_async(ticks) -> coro_task<void>`
+    - `evaluate_genome_copy_async(g)`
+    - `get_best_brain() -> brain`
+    - `save_best() / load_best()`
+    - `save_pool() / load_pool()`
+  | {
+    style: {
+      fill: "#3D3D3D"
+      stroke: "#A0522D"
+      stroke-width: 2
+      border-radius: 8
+      font-color: "#E8DCC8"
+      shadow: true
+    }
+  }
+}
+
+# ============================================================================
+# POOL LAYER - Evolution Engine
+# ============================================================================
+pool_layer: Pool Layer (Evolution Engine) {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  pool: |md
+    ## pool
+    **include/pool.hpp**
+    ---
+    **Fields:**
+    - `innovation_chan: innovation_channel`
+    - `species_chan: unique_ptr<species_channel>`
+    - `species: list<specie>`
+    - `best_genome_ever: optional<genome>`
+    - `mutation_rates: mutation_rate_container`
+    - `speciating_parameters: speciating_parameter_container`
+    - `network_info: network_info_container`
+    ---
+    **Evolution Methods:**
+    - `breed_child(s) -> coro_task<genome>`
+    - `reproduce_one() -> genome`
+    - `remove_worst() -> bool`
+    - `add_to_species(child)`
+    ---
+    **Mutation Methods:**
+    - `mutate(g) -> coro_task<void>`
+    - `mutate_weight(g)`
+    - `mutate_link(g)`
+    - `mutate_neuron(g)`
+    ---
+    **Speciation Methods:**
+    - `is_same_species(g1, g2) -> bool`
+    - `disjoint(g1, g2) -> exfloat`
+    - `excess(g1, g2) -> exfloat`
+    - `mut_diff(g1, g2) -> exfloat`
+  | {
+    style: {
+      fill: "#3D3D3D"
+      stroke: "#A0522D"
+      stroke-width: 2
+      border-radius: 8
+      font-color: "#E8DCC8"
+      shadow: true
+    }
+  }
+}
+
+# ============================================================================
+# SPECIES LAYER
+# ============================================================================
+species_layer: Species Layer {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  specie: |md
+    ## specie
+    **include/specie.hpp**
+    ---
+    **Fields:**
+    - `id: size_t`
+    - `age: size_t`
+    - `top_fitness: sync_shared_value<size_t>`
+    - `max_fitness_ever: sync_shared_value<size_t>`
+    - `average_fitness: sync_shared_value<size_t>`
+    - `staleness: sync_shared_value<size_t>`
+    - `expected_offspring: sync_shared_value<size_t>`
+    - `genomes: sync_shared_value<vector<genome>>`
+    - `novel: bool`
+    - `champion_preserved: bool`
+    - `obliterate: bool`
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      border-radius: 4
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# GENOME LAYER
+# ============================================================================
+genome_layer: Genome Layer {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  genome: |md
+    ## genome
+    **include/genome.hpp**
+    ---
+    **Fitness (thread-safe):**
+    - `fitness: sync_shared_value<size_t>`
+    - `adjusted_fitness: sync_shared_value<size_t>`
+    - `time_alive: sync_shared_value<size_t>`
+    ---
+    **Genetic Material:**
+    - `genes: map<size_t, gene>`
+    - `traits: vector<trait>`
+    - `max_neuron: size_t`
+    ---
+    **rtNEAT Metadata:**
+    - `champion: bool`
+    - `pop_champ: bool`
+    - `eliminate: bool`
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      border-radius: 4
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# EXECUTION LAYER
+# ============================================================================
+execution_layer: Execution Layer {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  brain: |md
+    ## brain
+    **include/brain.hpp**
+    ---
+    **Fields:**
+    - `neurons: vector<neuron>`
+    - `traits: vector<trait>`
+    - `recurrent: bool`
+    - `hebbian_enabled: bool`
+    - `input_neurons: vector<size_t>`
+    - `output_neurons: vector<size_t>`
+    ---
+    **Methods:**
+    - `evaluate(input, output)`
+    - `evaluate_nonrecurrent()`
+    - `evaluate_recurrent()`
+    - `apply_hebbian_learning()`
+    - `flush() / reset_state()`
+  | {
+    style: {
+      fill: "#3D3D3D"
+      stroke: "#A0522D"
+      stroke-width: 2
+      border-radius: 8
+      font-color: "#E8DCC8"
+      shadow: true
+    }
+  }
+}
+
+# ============================================================================
+# ASYNC SERVICES
+# ============================================================================
+async_services: Async Services (Coroutine-based) {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#556B2F"
+    stroke-width: 2
+    stroke-dash: 5
+    font-color: "#D2B48C"
+  }
+
+  innovation_channel: |md
+    ## innovation_channel
+    **include/innovation_channel.hpp**
+    ---
+    Lock-free innovation tracking
+    - `request_innovation_async()`
+    - `add_gene_direct()`
+    - `run_service() -> coro_task`
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      stroke-dash: 5
+    }
+  }
+
+  species_channel: |md
+    ## species_channel
+    **include/species_channel.hpp**
+    ---
+    Async species management
+    - Channel-based requests
+    - Service coroutine
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      stroke-dash: 5
+    }
+  }
+}
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+visualization: Visualization {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  network_visualizer: |md
+    ## network_visualizer
+    **include/network_visualizer.hpp**
+    ---
+    Raylib-based real-time
+    neural network display
+    - Node positions
+    - Connection weights
+    - Activation values
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      border-radius: 6
+    }
+  }
+}
+
+# ============================================================================
+# CONNECTIONS
+# ============================================================================
+
+# User to Model
+user_layer.fitness_func -> model_layer.model: "provides evaluation" {
+  style: {
+    stroke: "#6B8E23"
+    stroke-width: 2
+  }
+}
+
+# Model to Pool
+model_layer.model -> pool_layer.pool: "owns & manages" {
+  style: {
+    stroke: "#A0522D"
+    stroke-width: 2
+  }
+}
+
+# Pool to Species
+pool_layer.pool -> species_layer.specie: "contains list<>" {
+  style: {
+    stroke: "#CD853F"
+    stroke-width: 2
+  }
+}
+
+# Species to Genomes
+species_layer.specie -> genome_layer.genome: "contains vector<>" {
+  style: {
+    stroke: "#CD853F"
+    stroke-width: 2
+  }
+}
+
+# Genome to Brain
+genome_layer.genome -> execution_layer.brain: "builds network" {
+  style: {
+    stroke: "#A0522D"
+    stroke-width: 2
+  }
+}
+
+# Brain evaluated by fitness
+execution_layer.brain -> user_layer.fitness_func: "evaluated by" {
+  style: {
+    stroke: "#6B8E23"
+    stroke-width: 2
+    stroke-dash: 3
+  }
+}
+
+# Pool uses async services
+pool_layer.pool -> async_services.innovation_channel: "requests innovations" {
+  style: {
+    stroke: "#6B8E23"
+    stroke-width: 2
+    stroke-dash: 5
+  }
+}
+
+pool_layer.pool -> async_services.species_channel: "manages species" {
+  style: {
+    stroke: "#6B8E23"
+    stroke-width: 2
+    stroke-dash: 5
+  }
+}
+
+# Model uses visualizer
+model_layer.model -> visualization.network_visualizer: "displays" {
+  style: {
+    stroke: "#708090"
+    stroke-width: 1
+    stroke-dash: 3
+  }
+}
+
+# Brain to visualizer
+execution_layer.brain -> visualization.network_visualizer: "renders" {
+  style: {
+    stroke: "#708090"
+    stroke-width: 1
+    stroke-dash: 3
+  }
+}

@@ -1,0 +1,475 @@
+# ENEAT Genetic Structures
+# Detailed diagram of genome, gene, and trait structures
+
+direction: down
+
+style: {
+  fill: "#2D2D2D"
+}
+
+title: |md
+  # NEAT Genetic Representation
+  Genome contains genes (connections) and traits (learning parameters)
+| {
+  style: {
+    fill: "#2D2D2D"
+    font-color: "#E8DCC8"
+    stroke: transparent
+  }
+}
+
+# ============================================================================
+# GENOME STRUCTURE
+# ============================================================================
+genome: |md
+  ## struct genome
+  **include/genome.hpp**
+| {
+  style: {
+    fill: "#3D3D3D"
+    stroke: "#A0522D"
+    stroke-width: 3
+    font-color: "#E8DCC8"
+    border-radius: 8
+    shadow: true
+  }
+
+  fitness_section: |md
+    ### Thread-Safe Fitness
+    ```cpp
+    sync_shared_value<size_t> fitness{0}
+    sync_shared_value<size_t> adjusted_fitness{0}
+    sync_shared_value<size_t> global_rank{0}
+    sync_shared_value<size_t> time_alive{0}
+    ```
+  | {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  structure_section: |md
+    ### Network Structure
+    ```cpp
+    size_t max_neuron
+    bool can_be_recurrent = false
+    map<size_t, gene> genes
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  traits_section: |md
+    ### Hebbian Learning
+    ```cpp
+    vector<trait> traits
+    map<size_t, size_t> node_traits
+    set<size_t> frozen_nodes
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  config_section: |md
+    ### Configuration
+    ```cpp
+    mutation_rate_container mutation_rates
+    network_info_container network_info
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  rtneat_section: |md
+    ### rtNEAT Metadata
+    ```cpp
+    bool mate_baby = false
+    bool mut_struct_baby = false
+    size_t super_champ_offspring = 0
+    bool pop_champ = false
+    bool champion = false
+    bool eliminate = false
+    bool winner = false
+    size_t generation_born = 0
+    size_t orig_fitness = 0
+    exfloat error = 0.0f
+    size_t high_fit = 0
+    ```
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+
+  methods_section: |md
+    ### Methods
+    ```cpp
+    const trait* get_trait(size_t trait_id)
+    size_t add_trait(const trait& t)
+    void age()  // increment time_alive
+    size_t extrons()  // count enabled genes
+    void randomize_traits()
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# GENE STRUCTURE
+# ============================================================================
+gene: |md
+  ## struct gene
+  **include/gene.hpp**
+| {
+  style: {
+    fill: "#3D3D3D"
+    stroke: "#A0522D"
+    stroke-width: 3
+    font-color: "#E8DCC8"
+    border-radius: 8
+    shadow: true
+  }
+
+  connection_section: |md
+    ### Connection Identity
+    ```cpp
+    size_t innovation_num = -1
+    size_t from_node = -1
+    size_t to_node = -1
+    ```
+  | {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  weight_section: |md
+    ### Weight & Activation
+    ```cpp
+    exfloat weight = 0.0f
+    ai_func_type activation = RELU
+    exfloat mutation_num = 0.0f
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  flags_section: |md
+    ### Flags
+    ```cpp
+    bool enabled = true
+    bool is_bias_source = false
+    bool is_recurrent = false
+    bool is_time_delayed = false
+    bool frozen = false
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  trait_section: |md
+    ### Hebbian Trait Reference
+    ```cpp
+    size_t trait_id = 0
+    // 0 = no trait, 1+ = index
+    exfloat params[8] = {0.0f}
+    ```
+  | {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# TRAIT STRUCTURE
+# ============================================================================
+trait: |md
+  ## struct trait
+  **include/trait.hpp**
+| {
+  style: {
+    fill: "#3D3D3D"
+    stroke: "#A0522D"
+    stroke-width: 3
+    font-color: "#E8DCC8"
+    border-radius: 8
+    shadow: true
+  }
+
+  identity_section: |md
+    ### Identity
+    ```cpp
+    size_t trait_id = 0
+    array<exfloat, 8> params
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  params_section: |md
+    ### Parameter Indices (trait_param enum)
+    ```cpp
+    [0] HEBBIAN_RATE       // pre * post correlation
+    [1] PRESYNAPTIC_RATE   // presynaptic activity
+    [2] POSTSYNAPTIC_RATE  // postsynaptic activity
+    [3] MAX_WEIGHT         // maximum weight bound
+    [4] MIN_WEIGHT         // minimum weight bound
+    [5] LEARNING_SIGNAL    // modulation signal
+    [6] RESERVED_1
+    [7] RESERVED_2
+    ```
+  | {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 2
+      font-color: "#2D2D2D"
+    }
+  }
+
+  methods_section: |md
+    ### Methods
+    ```cpp
+    static trait average(t1, t2)
+    void mutate(power, prob)
+    bool is_learning_enabled()
+    // true if trait_id in [2,4]
+    exfloat hebbian_rate()
+    exfloat presynaptic_rate()
+    exfloat postsynaptic_rate()
+    exfloat max_weight()
+    exfloat min_weight()
+    ```
+  | {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# ACTIVATION FUNCTIONS
+# ============================================================================
+activation_funcs: |md
+  ## ai_func_type enum
+  **include/functions.hpp**
+  ---
+  ```cpp
+  RELU      = 0  // max(0, x)
+  LINEAR    = 1  // x
+  HEAVISIDE = 2  // x >= 0 ? 1 : 0
+  LOGISTIC  = 3  // 1 / (1 + e^-x)
+  SIGMOID   = 4  // 2 / (1 + e^-x) - 1
+  TANH      = 5  // tanh(x)
+  GELU      = 6  // gaussian error linear
+  SWISH     = 7  // x * sigmoid(x)
+  LEAKY_RELU = 8 // x > 0 ? x : 0.01x
+  NORMALIZE = 9  // x / alpha
+  ```
+| {
+  style: {
+    fill: "#3A3A3A"
+    stroke: "#8A9A5B"
+    stroke-width: 2
+    font-color: "#D2B48C"
+    border-radius: 4
+  }
+}
+
+# ============================================================================
+# CONFIG CONTAINERS
+# ============================================================================
+config_containers: Configuration Containers {
+  style: {
+    fill: "#2D2D2D"
+    stroke: "#5A5A5A"
+    stroke-dash: 3
+    font-color: "#D2B48C"
+  }
+
+  mutation_rates: |md
+    ### mutation_rate_container
+    ```cpp
+    connection_mutate_chance = 0.90
+    link_mutation_chance = 0.10
+    neuron_mutation_chance = 0.0025
+    bias_neuron_mutation_chance = 0.02
+    activation_mutation_chance = 0.07
+    crossover_chance = 0.75
+    perturb_chance = 0.90
+    step_size = 2.5
+    disable_mutation_chance = 0.0
+    enable_mutation_chance = 0.0
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  network_info: |md
+    ### network_info_container
+    ```cpp
+    size_t inputs
+    size_t outputs
+    size_t bias
+    size_t functional_neurons
+    size_t max_neurons
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  speciating_params: |md
+    ### speciating_parameter_container
+    ```cpp
+    exfloat delta_disjoint = 1.0
+    exfloat delta_excess = 1.0
+    exfloat delta_weights = 2.0
+    exfloat delta_threshold = 3.0
+    size_t stale_species = 15
+    exfloat survival_thresh = 0.2
+    bool dynamic_threshold_enabled
+    size_t target_species = 10
+    ```
+  | {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+}
+
+# ============================================================================
+# CONNECTIONS / RELATIONSHIPS
+# ============================================================================
+
+genome -> gene: "genes: map<innovation_num, gene>" {
+  style: {
+    stroke: "#CD853F"
+    stroke-width: 2
+  }
+}
+
+genome -> trait: "traits: vector<trait>" {
+  style: {
+    stroke: "#8B4513"
+    stroke-width: 2
+  }
+}
+
+gene -> trait: "trait_id reference" {
+  style: {
+    stroke: "#8B4513"
+    stroke-width: 2
+    stroke-dash: 3
+  }
+}
+
+gene -> activation_funcs: "activation type" {
+  style: {
+    stroke: "#8A9A5B"
+    stroke-width: 1
+    stroke-dash: 3
+  }
+}
+
+genome -> config_containers.mutation_rates: "mutation_rates" {
+  style: {
+    stroke: "#708090"
+    stroke-width: 1
+    stroke-dash: 3
+  }
+}
+
+genome -> config_containers.network_info: "network_info" {
+  style: {
+    stroke: "#708090"
+    stroke-width: 1
+    stroke-dash: 3
+  }
+}
+
+# ============================================================================
+# INNOVATION NUMBER EXPLANATION
+# ============================================================================
+innovation_note: |md
+  ## Innovation Numbers
+  **Historical Marking for Crossover Alignment**
+  ---
+  - Each unique connection (from_node, to_node) gets a global innovation number
+  - Genes with same innovation_num are **matching genes**
+  - Genes in one parent but not the other within shared range: **disjoint genes**
+  - Genes beyond the other parent's max innovation: **excess genes**
+  - Enables meaningful crossover without topological analysis
+| {
+  style: {
+    fill: "#4A5568"
+    stroke: "#708090"
+    stroke-width: 2
+    font-color: "#E8DCC8"
+    border-radius: 8
+  }
+}

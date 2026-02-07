@@ -7,6 +7,7 @@ std::istream &operator>>(std::istream &input, mutation_rate_container &mrc) {
   input >> mrc.link_mutation_chance;
   input >> mrc.neuron_mutation_chance;
   input >> mrc.bias_mutation_chance;
+  input >> mrc.bias_neuron_mutation_chance;
   input >> mrc.step_size;
   input >> mrc.disable_mutation_chance;
   input >> mrc.enable_mutation_chance;
@@ -21,6 +22,7 @@ std::ostream &operator<<(std::ostream &output, mutation_rate_container &mrc) {
   output << mrc.link_mutation_chance << std::endl;
   output << mrc.neuron_mutation_chance << std::endl;
   output << mrc.bias_mutation_chance << std::endl;
+  output << mrc.bias_neuron_mutation_chance << std::endl;
   output << mrc.step_size << std::endl;
   output << mrc.disable_mutation_chance << std::endl;
   output << mrc.enable_mutation_chance << std::endl;

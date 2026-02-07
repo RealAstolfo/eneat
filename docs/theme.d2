@@ -1,0 +1,144 @@
+# ENEAT D2 Theme - Earth Tones on Dark Gray
+# Shared theme configuration for all diagrams
+
+vars: {
+  d2-config: {
+    theme-id: 200
+    dark-theme-id: 200
+    layout-engine: elk
+  }
+
+  # Earth tone color palette
+  colors: {
+    # Background
+    background: "#2D2D2D"
+
+    # Primary earth tones
+    rust: "#A0522D"
+    rust-light: "#CD853F"
+    olive: "#6B8E23"
+    olive-dark: "#556B2F"
+    sand: "#D2B48C"
+    sand-light: "#E8DCC8"
+    clay: "#8B4513"
+    clay-dark: "#A52A2A"
+    stone: "#708090"
+    stone-dark: "#5A5A5A"
+
+    # Accent colors
+    copper: "#B87333"
+    bronze: "#CD7F32"
+    moss: "#8A9A5B"
+    slate: "#4A5568"
+  }
+}
+
+# Default styles
+classes: {
+  # Main component boxes
+  component: {
+    style: {
+      fill: "#3D3D3D"
+      stroke: "#A0522D"
+      stroke-width: 2
+      border-radius: 8
+      font-color: "#E8DCC8"
+      shadow: true
+    }
+  }
+
+  # Struct/Class definitions
+  struct: {
+    style: {
+      fill: "#353535"
+      stroke: "#CD853F"
+      stroke-width: 2
+      border-radius: 4
+      font-color: "#E8DCC8"
+    }
+  }
+
+  # Input/Output nodes
+  io: {
+    style: {
+      fill: "#6B8E23"
+      stroke: "#556B2F"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      border-radius: 20
+    }
+  }
+
+  # Process/Action boxes
+  process: {
+    style: {
+      fill: "#4A5568"
+      stroke: "#708090"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      border-radius: 6
+    }
+  }
+
+  # Data flow
+  data: {
+    style: {
+      fill: "#8B4513"
+      stroke: "#A52A2A"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+    }
+  }
+
+  # Thread-safe/async components
+  async: {
+    style: {
+      fill: "#556B2F"
+      stroke: "#6B8E23"
+      stroke-width: 2
+      font-color: "#E8DCC8"
+      stroke-dash: 5
+    }
+  }
+
+  # Highlight/emphasis
+  highlight: {
+    style: {
+      fill: "#B87333"
+      stroke: "#CD7F32"
+      stroke-width: 3
+      font-color: "#2D2D2D"
+      shadow: true
+    }
+  }
+
+  # Container/grouping
+  container: {
+    style: {
+      fill: "#2D2D2D"
+      stroke: "#5A5A5A"
+      stroke-width: 1
+      stroke-dash: 3
+      font-color: "#D2B48C"
+    }
+  }
+
+  # Enum/Type definitions
+  enum: {
+    style: {
+      fill: "#3A3A3A"
+      stroke: "#8A9A5B"
+      stroke-width: 2
+      font-color: "#D2B48C"
+      border-radius: 4
+    }
+  }
+
+  # Connection label style
+  label: {
+    style: {
+      font-color: "#D2B48C"
+      font-size: 12
+    }
+  }
+}
