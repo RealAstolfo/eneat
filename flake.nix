@@ -36,7 +36,7 @@
           src = ./.;
 
           nativeBuildInputs = with pkgs; [ zig gnumake pkg-config ];
-          buildInputs = with pkgs; [ zlib raylib ];
+          buildInputs = with pkgs; [ zlib raylib mimalloc ];
 
           postUnpack = ''
             rm -rf $sourceRoot/vendors
@@ -45,7 +45,14 @@
             cp -r ${ethreadsPkg.passthru.src-with-vendors} $sourceRoot/vendors/ethreads
             cp -r ${emathPkg.passthru.src-with-vendors} $sourceRoot/vendors/emath
             chmod -R u+w $sourceRoot/vendors
+
+            # Patch missing <thread> include in ethreads
+            sed -i '/#include <vector>/a #include <thread>' \
+              $sourceRoot/vendors/ethreads/include/timer_service.hpp
           '';
+
+          env.ZIG_GLOBAL_CACHE_DIR = "/tmp/zig-cache";
+          env.ZIG_LOCAL_CACHE_DIR = "/tmp/zig-local-cache";
 
           buildPhase = ''
             make ai.o
@@ -77,6 +84,8 @@
             zlib
             pkg-config
             raylib
+            mimalloc
+            liburing
             valgrind
             d2
           ];
@@ -98,6 +107,13 @@
               cp -r ${emathPkg.passthru.src-with-vendors} vendors/emath
               chmod -R u+w vendors/emath
             fi
+
+            # Patch missing <thread> include in ethreads
+            if ! grep -q '#include <thread>' vendors/ethreads/include/timer_service.hpp 2>/dev/null; then
+              sed -i '/#include <vector>/a #include <thread>' \
+                vendors/ethreads/include/timer_service.hpp
+            fi
+
             echo "ENEAT development environment"
             echo "  Build: make all"
             echo "  Run:   ./neat_coro"
@@ -114,6 +130,7 @@
             zlib
             pkg-config
             raylib
+            mimalloc
             valgrind
             linuxPackages.perf
             flamegraph
@@ -137,6 +154,13 @@
               cp -r ${emathPkg.passthru.src-with-vendors} vendors/emath
               chmod -R u+w vendors/emath
             fi
+
+            # Patch missing <thread> include in ethreads
+            if ! grep -q '#include <thread>' vendors/ethreads/include/timer_service.hpp 2>/dev/null; then
+              sed -i '/#include <vector>/a #include <thread>' \
+                vendors/ethreads/include/timer_service.hpp
+            fi
+
             echo "ENEAT profiling environment"
             echo "  Profile: make profile"
             echo "  Hotspot: hotspot perf.data (per-thread analysis)"

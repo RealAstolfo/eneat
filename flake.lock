@@ -1,5 +1,94 @@
 {
   "nodes": {
+    "bitsery": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1759947698,
+        "narHash": "sha256-f+qMhyUfQIqJC1r/rwtFV0+Sd04vCoOa7AkfgusDyG8=",
+        "owner": "fraillt",
+        "repo": "bitsery",
+        "rev": "9bebfd4911b8ef52c5a67754ccb87a8fd5223414",
+        "type": "github"
+      },
+      "original": {
+        "owner": "fraillt",
+        "repo": "bitsery",
+        "type": "github"
+      }
+    },
+    "emath": {
+      "inputs": {
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1770428132,
+        "narHash": "sha256-hcTe4m3kZDj1uEZuGZtmWgSbbexdWCVQYx4n62/aMtA=",
+        "owner": "RealAstolfo",
+        "repo": "emath",
+        "rev": "952a815a1b3e871bb249a42c1499e911d41acbb9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "RealAstolfo",
+        "repo": "emath",
+        "type": "github"
+      }
+    },
+    "ethreads": {
+      "inputs": {
+        "exstd": [
+          "exstd"
+        ],
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1773882899,
+        "narHash": "sha256-YbfRgzyoMN4tt2btd3uqYgcl0OBoDew4GlvIqelL4HY=",
+        "owner": "RealAstolfo",
+        "repo": "ethreads",
+        "rev": "a81d762988ae5c9d4b1c67cdb2d9e61b4ffcb67a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "RealAstolfo",
+        "repo": "ethreads",
+        "type": "github"
+      }
+    },
+    "exstd": {
+      "inputs": {
+        "bitsery": "bitsery",
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1770428131,
+        "narHash": "sha256-vaRL8ulPk2ssDy/i++rm3b2aLJc45Yga/f6yG7OjibM=",
+        "owner": "RealAstolfo",
+        "repo": "exstd",
+        "rev": "1f0a7556601de464dc3fb6dc3d9cccbda38583ef",
+        "type": "github"
+      },
+      "original": {
+        "owner": "RealAstolfo",
+        "repo": "exstd",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -36,6 +125,9 @@
     },
     "root": {
       "inputs": {
+        "emath": "emath",
+        "ethreads": "ethreads",
+        "exstd": "exstd",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs"
       }

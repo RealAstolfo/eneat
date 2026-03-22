@@ -19,6 +19,7 @@ ZLIB = $(ZLIB_CFLAGS) $(ZLIB_LIBS)
 RAYLIB_CFLAGS = `pkg-config --cflags raylib`
 RAYLIB_LIBS = `pkg-config --libs raylib`
 RAYLIB = $(RAYLIB_CFLAGS) $(RAYLIB_LIBS)
+ETHREADS_LIBS = -lmimalloc -luring
 
 # AI
 brain.o:
@@ -53,7 +54,7 @@ neat.o:
 	${CXX} ${CXXFLAGS} -c builds/neat.cpp -o $@
 
 neat: ai.o neat.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+	${CXX} ${CXXFLAGS} ${ZLIB} ${ETHREADS_LIBS} $^ -o $@
 
 # Network Visualizer (raylib)
 network-visualizer.o:
@@ -64,35 +65,35 @@ neat_coro.o:
 	${CXX} ${CXXFLAGS} -c builds/neat_coro.cpp -o $@
 
 neat_coro: ai.o neat_coro.o network-visualizer.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} $^ -o $@
+	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} ${ETHREADS_LIBS} $^ -o $@
 
 # Genome control demo (gene expression, crossover variants)
 neat_genome_control.o:
 	${CXX} ${CXXFLAGS} -c builds/neat_genome_control.cpp -o $@
 
 neat_genome_control: ai.o neat_genome_control.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+	${CXX} ${CXXFLAGS} ${ZLIB} ${ETHREADS_LIBS} $^ -o $@
 
 # Hebbian learning demo (T-maze, temporal memory)
 neat_hebbian.o:
 	${CXX} ${CXXFLAGS} -c builds/neat_hebbian.cpp -o $@
 
 neat_hebbian: ai.o neat_hebbian.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+	${CXX} ${CXXFLAGS} ${ZLIB} ${ETHREADS_LIBS} $^ -o $@
 
 # Coevolution demo (predator-prey, rtNEAT control)
 neat_coevolution.o:
 	${CXX} ${CXXFLAGS} -c builds/neat_coevolution.cpp -o $@
 
 neat_coevolution: ai.o neat_coevolution.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} ${ZLIB} $^ -o $@
+	${CXX} ${CXXFLAGS} ${ZLIB} ${ETHREADS_LIBS} $^ -o $@
 
 # Interactive visualization demo (custom labels, output override)
 neat_visualized.o:
 	${CXX} ${CXXFLAGS} -c builds/neat_visualized.cpp -o $@
 
 neat_visualized: ai.o neat_visualized.o network-visualizer.o vendors/ethreads/threading.o
-	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} $^ -o $@
+	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} ${ETHREADS_LIBS} $^ -o $@
 
 all: neat neat_coro neat_genome_control neat_hebbian neat_coevolution neat_visualized
 
@@ -126,7 +127,7 @@ neat-debug.o:
 	${CXX_DEBUG} ${CXXFLAGS_DEBUG} -c builds/neat.cpp -o $@
 
 neat-valgrind: ai-debug.o neat-debug.o vendors/ethreads/threading-debug.o
-	${CXX_DEBUG} ${CXXFLAGS_DEBUG} ${ZLIB} $^ -o $@
+	${CXX_DEBUG} ${CXXFLAGS_DEBUG} ${ZLIB} ${ETHREADS_LIBS} $^ -o $@
 
 neat_coro-debug.o:
 	${CXX_DEBUG} ${CXXFLAGS_DEBUG} -c builds/neat_coro.cpp -o $@
@@ -136,7 +137,7 @@ network-visualizer-debug.o:
 
 neat_coro-valgrind: ai-debug.o neat_coro-debug.o network-visualizer-debug.o \
                     vendors/ethreads/threading-debug.o
-	${CXX_DEBUG} ${CXXFLAGS_DEBUG} ${ZLIB} ${RAYLIB} $^ -o $@
+	${CXX_DEBUG} ${CXXFLAGS_DEBUG} ${ZLIB} ${RAYLIB} ${ETHREADS_LIBS} $^ -o $@
 
 # Helgrind targets
 valgrind-all: neat-valgrind neat_coro-valgrind
@@ -180,7 +181,7 @@ neat-profile.o:
 	${CXX} ${CXXFLAGS_PROFILE} -c builds/neat.cpp -o $@
 
 neat-profile: ai-profile.o neat-profile.o vendors/ethreads/threading-profile.o
-	${CXX} ${CXXFLAGS_PROFILE} ${ZLIB} $^ -o $@
+	${CXX} ${CXXFLAGS_PROFILE} ${ZLIB} ${ETHREADS_LIBS} $^ -o $@
 
 # Run profiling and generate flamegraph + text report
 # Uses frame pointer call-graph (faster than dwarf) with 10 second timeout
