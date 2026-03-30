@@ -95,7 +95,18 @@ neat_visualized.o:
 neat_visualized: ai.o neat_visualized.o network-visualizer.o vendors/ethreads/threading.o
 	${CXX} ${CXXFLAGS} ${ZLIB} ${RAYLIB} ${ETHREADS_LIBS} $^ -o $@
 
-all: neat neat_coro neat_genome_control neat_hebbian neat_coevolution neat_visualized
+# ONNX export (for NPU deployment pipeline)
+onnx-export.o:
+	${CXX} ${CXXFLAGS} -c src/onnx_export.cpp -o $@
+
+# NPU pipeline test (train → export ONNX → verify)
+neat_npu.o:
+	${CXX} ${CXXFLAGS} -c builds/neat_npu.cpp -o $@
+
+neat_npu: ai.o onnx-export.o neat_npu.o vendors/ethreads/threading.o
+	${CXX} ${CXXFLAGS} ${ZLIB} ${ETHREADS_LIBS} $^ -o $@
+
+all: neat neat_coro neat_genome_control neat_hebbian neat_coevolution neat_visualized neat_npu
 
 #########################################################################################
 # Debug builds for Valgrind
@@ -196,7 +207,7 @@ profile: neat-profile
 	@echo "  profile.txt - Text summary of hotspots"
 
 clean:
-	-rm -f neat neat_coro neat_genome_control neat_hebbian neat_coevolution neat_visualized
+	-rm -f neat neat_coro neat_genome_control neat_hebbian neat_coevolution neat_visualized neat_npu
 	-rm -f neat-valgrind neat_coro-valgrind neat-profile *.o *-debug.o *-profile.o
 	-rm -f profile.svg profile.txt perf.data perf.data.old
 	-rm -f mux_best_brain.txt
