@@ -14,6 +14,13 @@
 
 using fitness_func_t = std::function<ethreads::coro_task<size_t>(brain &)>;
 
+// Result of evaluating a genome copy: the fitness plus the genome carrying the
+// Hebbian-learned weights written back from the brain (Lamarckian inheritance).
+struct eval_result {
+  size_t fitness = 0;
+  genome learned;
+};
+
 struct model {
   model(const fitness_func_t &get_fitness, std::string &model_name,
         size_t input, size_t output, size_t population = 150,
@@ -39,8 +46,11 @@ struct model {
   // Run continuous evolution for N ticks
   ethreads::coro_task<void> evolve_async(std::size_t ticks);
 
-  // Evaluate a genome copy and return fitness (safe across co_await points)
-  ethreads::coro_task<size_t> evaluate_genome_copy_async(genome g);
+  // Evaluate a genome copy and return fitness plus the genome carrying the
+  // Hebbian-learned weights (safe across co_await points). The learned genome
+  // is the by-value copy with brain weights written back, ready to propagate
+  // back into the population via pool::set_genome_weights.
+  ethreads::coro_task<eval_result> evaluate_genome_copy_async(genome g);
 
   // Set parallel evaluation batch size (default: hardware_concurrency)
   void set_batch_size(size_t size) { batch_size_ = size; }

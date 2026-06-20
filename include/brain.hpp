@@ -23,6 +23,10 @@ struct brain {
   std::vector<eneat::trait> traits;  // Traits for Hebbian learning
   bool recurrent = false;
   bool hebbian_enabled = false;      // Enable Hebbian weight modification
+  // Number of activation (synapse-hop) passes to run per evaluate() call so
+  // that each item's outputs reflect the item actually presented rather than a
+  // single lagged hop. Derived from network depth at operator=(genome).
+  size_t settle_passes = 3;
   std::vector<size_t> input_neurons;
   std::vector<size_t> bias_neurons;
   std::vector<size_t> output_neurons;
@@ -71,6 +75,19 @@ struct brain {
 
   // Check if network has finished activating (all outputs have values)
   bool outputs_ready() const;
+
+  // Lamarckian Hebbian write-back: copy each connection's (possibly Hebbian-
+  // learned) weight back into the matching ENABLED gene of g, identified by the
+  // (from_node, to_node) pair recorded on the connection. Only gene.weight is
+  // modified; innovation numbers, enabled flags, structure, traits and node ids
+  // are left untouched. Disabled genes and connections with unknown node ids
+  // (src_node/dst_node == SIZE_MAX) are skipped.
+  void write_back_to(genome &g) const;
+
+  // Compute the max feed-forward depth (longest non-recurrent path from a
+  // sensor to an output) and store it in settle_passes so evaluate_recurrent
+  // propagates enough hops to de-lag per-item scoring.
+  void compute_settle_passes();
 
   // Debug: Get fingerprint of brain structure and weights
   std::string fingerprint() const;

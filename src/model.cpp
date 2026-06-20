@@ -45,11 +45,15 @@ size_t model::population_size() const {
 
 // Evaluate a genome copy and return fitness (safe across co_await points)
 // Note: Pool tracks best genome via set_genome_fitness() -> update_best_genome()
-ethreads::coro_task<size_t> model::evaluate_genome_copy_async(genome g) {
+ethreads::coro_task<eval_result> model::evaluate_genome_copy_async(genome g) {
   brain net;
   net = g;
   size_t fitness = co_await get_fitness(net);
-  co_return fitness;
+  // Lamarckian Hebbian write-back: copy the brain's (Hebbian-learned) weights
+  // back into the by-value genome copy so the plasticity can be inherited. The
+  // caller propagates these learned weights into the real population genome.
+  net.write_back_to(g);
+  co_return eval_result{fitness, std::move(g)};
 }
 
 // === rtNEAT-style decoupled evolution ===
@@ -71,7 +75,7 @@ ethreads::coro_task<void> model::evaluate_batch_async() {
   eval_index_ = eval_index_ % pop_size;
 
   // Collect genome copies and create tasks
-  std::vector<ethreads::coro_task<size_t>> tasks;
+  std::vector<ethreads::coro_task<eval_result>> tasks;
   std::vector<std::pair<size_t, size_t>> batch_indices;
   tasks.reserve(batch);
   batch_indices.reserve(batch);
@@ -93,11 +97,15 @@ ethreads::coro_task<void> model::evaluate_batch_async() {
 
   // Wait for all evaluations and update original genomes
   for (size_t i = 0; i < batch; i++) {
-    size_t fitness = co_await tasks[i];
+    eval_result res = co_await tasks[i];
     auto [species_idx, genome_idx] = batch_indices[i];
 
+    // Lamarckian Hebbian: write learned weights back into the population genome
+    // BEFORE fitness, so the inherited plasticity is in place for evolution.
+    p->set_genome_weights(species_idx, genome_idx, res.learned);
+
     // Update original genome's fitness and age (thread-safe via pool methods)
-    p->set_genome_fitness(species_idx, genome_idx, fitness);
+    p->set_genome_fitness(species_idx, genome_idx, res.fitness);
     p->increment_genome_age(species_idx, genome_idx);
   }
 
@@ -131,7 +139,7 @@ ethreads::coro_task<void> model::tick_async() {
   eval_index_ = eval_index_ % pop_size;
 
   // Collect genome copies and create tasks
-  std::vector<ethreads::coro_task<size_t>> tasks;
+  std::vector<ethreads::coro_task<eval_result>> tasks;
   std::vector<std::pair<size_t, size_t>> batch_indices;
   tasks.reserve(batch);
   batch_indices.reserve(batch);
@@ -153,11 +161,15 @@ ethreads::coro_task<void> model::tick_async() {
 
   // Wait for all evaluations and update original genomes
   for (size_t i = 0; i < batch; i++) {
-    size_t fitness = co_await tasks[i];
+    eval_result res = co_await tasks[i];
     auto [species_idx, genome_idx] = batch_indices[i];
 
+    // Lamarckian Hebbian: write learned weights back into the population genome
+    // BEFORE fitness, so the inherited plasticity is in place for evolution.
+    p->set_genome_weights(species_idx, genome_idx, res.learned);
+
     // Update original genome's fitness and age (thread-safe via pool methods)
-    p->set_genome_fitness(species_idx, genome_idx, fitness);
+    p->set_genome_fitness(species_idx, genome_idx, res.fitness);
     p->increment_genome_age(species_idx, genome_idx);
   }
 

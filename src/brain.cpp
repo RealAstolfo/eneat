@@ -76,6 +76,8 @@ std::istream &operator>>(std::istream &input, brain &b) {
       b.neurons[i].in_connections.emplace_back(from, w, tid, rec, td);
     }
   }
+  // Derive settling passes from the deserialized network depth.
+  b.compute_settle_passes();
   return input;
 }
 
@@ -199,6 +201,12 @@ void brain::operator=(const genome &g) {
         it->second.is_time_delayed
     );
 
+    // Record the originating gene node ids so learned (Hebbian) weights can be
+    // written back to the matching enabled gene in the genome later.
+    conn.src_node = it->second.from_node;
+    conn.dst_node = it->second.to_node;
+    conn.innovation_num = it->second.innovation_num;
+
     // Derive trait parameters for the connection
     if (it->second.trait_id > 0 && it->second.trait_id <= g.traits.size()) {
       const auto& trait = g.traits[it->second.trait_id - 1];
@@ -221,6 +229,53 @@ void brain::operator=(const genome &g) {
       }
     }
   }
+
+  // Derive how many synapse-hop passes evaluate_recurrent should run per call
+  // so each item's outputs reflect the freshly loaded inputs.
+  compute_settle_passes();
+}
+
+// Compute the longest feed-forward path length (in synapse hops) from any
+// sensor to any output, ignoring recurrent edges, and use it as the number of
+// settling passes per evaluate() call. This lets a single evaluate() propagate
+// inputs all the way to the outputs instead of a single lagged hop.
+void brain::compute_settle_passes() {
+  const size_t n = neurons.size();
+  // depth[i] = longest hop distance from a sensor to neuron i (feed-forward).
+  std::vector<size_t> depth(n, 0);
+
+  // Iteratively relax: with at most n neurons the longest acyclic path is
+  // bounded by n, so n-1 relaxation sweeps suffice; stop early on no change.
+  for (size_t iter = 0; iter < n; iter++) {
+    bool changed = false;
+    for (size_t i = 0; i < n; i++) {
+      if (neurons[i].type == INPUT || neurons[i].type == BIAS) continue;
+      for (const auto &conn : neurons[i].in_connections) {
+        // Skip recurrent edges so cycles don't inflate the depth.
+        if (conn.is_recurrent) continue;
+        if (conn.from_neuron >= n) continue;
+        size_t cand = depth[conn.from_neuron] + 1;
+        if (cand > depth[i]) {
+          depth[i] = cand;
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  size_t max_output_depth = 0;
+  for (size_t out_idx : output_neurons) {
+    if (out_idx < n && depth[out_idx] > max_output_depth) {
+      max_output_depth = depth[out_idx];
+    }
+  }
+
+  // At least 1 pass; cap below the abort_count safety limit (20).
+  size_t passes = max_output_depth;
+  if (passes < 1) passes = 1;
+  if (passes > 16) passes = 16;
+  settle_passes = passes;
 }
 
 void brain::evaluate_nonrecurrent(const std::vector<exfloat> &input,
@@ -314,12 +369,84 @@ void brain::evaluate_recurrent(const std::vector<exfloat> &input,
     neurons[bias_neurons[i]].visited = true;
   }
 
-  // Loop until outputs are ready or abort limit reached
+  // Recurrence timestep model (IMPORTANT - keep consistent with how
+  // evaluate_sequence() drives exactly one evaluate() call per item/timestep):
+  //
+  //   * Non-recurrent (feed-forward) edges read the IN-PROGRESS value of their
+  //     source neuron, so multi-pass settling lets the freshly loaded inputs
+  //     propagate through the acyclic sub-graph within this single call.
+  //   * Plain recurrent edges (is_recurrent) read the source neuron's value
+  //     from BEFORE this call (the previous item/timestep), captured below into
+  //     prev_value[].
+  //   * Time-delayed edges (is_time_delayed) read the source neuron's
+  //     last_activation / activation_count from BEFORE this call (one step
+  //     further back, t-2), captured below into prev_last_activation[] /
+  //     prev_activation_count[]. The history fields are advanced exactly once
+  //     per call (after the settling loop), NOT once per settling pass.
+  //   This is what makes the network an RNN: hidden state persists ACROSS items
+  //   rather than re-converging within one item. Without these snapshots,
+  //   multi-pass settling would feed recurrent/time-delayed edges the
+  //   current-pass value and collapse cross-item recurrence into intra-item
+  //   settling.
+  //
+  // Snapshot every neuron's pre-call value (for plain recurrent edges) and its
+  // pre-call last_activation / activation_count (for time-delayed edges) so all
+  // recurrent reads see prior-timestep state regardless of in-place index-order
+  // updates during settling. The history fields are themselves advanced exactly
+  // once per call (after the settling loop), so a time-delayed edge implements a
+  // true t-2 delay across items instead of dissolving into intra-call settling.
+  std::vector<exfloat> prev_value(neurons.size());
+  std::vector<exfloat> prev_last_activation(neurons.size());
+  std::vector<exfloat> prev_activation_count(neurons.size());
+  for (size_t i = 0; i < neurons.size(); i++) {
+    prev_value[i] = neurons[i].value;
+    prev_last_activation[i] = neurons[i].last_activation;
+    prev_activation_count[i] = neurons[i].activation_count;
+  }
+
+  // Advance sensor (INPUT/BIAS) temporal history once per call too. Unlike
+  // hidden/output neurons, sensors are never activated in the settling loop and
+  // are skipped by the post-loop history-advance below, so without this their
+  // last_activation / activation_count would stay 0 forever and any
+  // time-delayed gene whose from_node is an input/bias neuron would gate
+  // `prev_activation_count[from] > 1` as false on every call -- silently
+  // contributing 0.0f and never transmitting the t-2 sensor value it was
+  // created to deliver. evaluate_recurrent loads inputs directly (line 362-370)
+  // rather than via load_sensors(), so the sensor_load() increment rtNEAT
+  // relies on is otherwise absent. We mirror the hidden/output convention:
+  //   * value at call entry (prev_value, == this item's freshly loaded input)
+  //     becomes the new last_activation (t-1 sensor value),
+  //   * the old last_activation slides to last_activation2 (t-2),
+  //   * activation_count is bumped by one real timestep.
+  // The prev_* snapshots above were taken BEFORE this advance, so the gate on
+  // input-sourced time-delayed edges sees the prior sensor history this call
+  // and the live (current) input is still read unchanged via neurons[..].value
+  // by feed-forward edges.
+  for (size_t i = 0; i < input_neurons.size(); i++) {
+    neuron &n = neurons[input_neurons[i]];
+    n.last_activation2 = n.last_activation;
+    n.last_activation = prev_value[input_neurons[i]];
+    n.activation_count = prev_activation_count[input_neurons[i]] + 1.0f;
+  }
+  for (size_t i = 0; i < bias_neurons.size(); i++) {
+    neuron &n = neurons[bias_neurons[i]];
+    n.last_activation2 = n.last_activation;
+    n.last_activation = prev_value[bias_neurons[i]];
+    n.activation_count = prev_activation_count[bias_neurons[i]] + 1.0f;
+  }
+
+  // Run a fixed number of activation (synapse-hop) passes per call so that the
+  // freshly loaded inputs propagate all the way to the outputs before they are
+  // read. settle_passes is derived from network depth at operator=(genome).
+  // We still require outputs to be ready at least once and keep the abort cap
+  // to guard against disconnected outputs / infinite loops.
   // Reference: rtNEAT network.cpp:161 - while(outputsoff()||!onetime)
+  // Recurrent hidden state is preserved between evaluate() calls (no flush here).
   int abort_count = 0;
+  size_t passes_done = 0;
   bool onetime = false;
 
-  while (!outputs_ready() || !onetime) {
+  while (passes_done < settle_passes || !outputs_ready() || !onetime) {
     if (++abort_count > 20) {
       break;  // Prevent infinite loop if outputs disconnected
     }
@@ -336,23 +463,29 @@ void brain::evaluate_recurrent(const std::vector<exfloat> &input,
         const auto& conn = neurons[i].in_connections[j];
         exfloat input_activation;
 
-        // Time-delayed connections use last_activation (t-1 for normal, t-2 for time-delayed)
-        // rtNEAT's get_active_out_td() returns last_activation if activation_count > 1
+        // Time-delayed connections use last_activation (t-2 across items).
+        // rtNEAT's get_active_out_td() returns last_activation if activation_count > 1.
+        // Read the PRE-CALL snapshots (not the live, per-pass-mutated fields) so
+        // the t-2 delay spans real timesteps/items instead of settling passes.
         if (conn.is_time_delayed) {
-          input_activation = (neurons[conn.from_neuron].activation_count > 1)
-              ? neurons[conn.from_neuron].last_activation
+          input_activation = (prev_activation_count[conn.from_neuron] > 1)
+              ? prev_last_activation[conn.from_neuron]
               : 0.0f;
+        } else if (conn.is_recurrent) {
+          // Plain recurrent edge: read the source neuron's value from the
+          // previous evaluate() call (previous item/timestep), NOT the
+          // in-progress settling value. This preserves cross-item RNN memory
+          // and prevents multi-pass settling from dissolving it into
+          // intra-item feedback.
+          input_activation = prev_value[conn.from_neuron];
         } else {
+          // Feed-forward edge: use the in-progress value so settling can
+          // propagate this item's inputs through the acyclic sub-graph.
           input_activation = neurons[conn.from_neuron].value;
         }
 
         sum += input_activation * conn.weight;
       }
-
-      // Shift activation history before computing new activation
-      // Reference: rtNEAT network.cpp:213-214
-      neurons[i].last_activation2 = neurons[i].last_activation;
-      neurons[i].last_activation = neurons[i].value;
 
       // Apply activation function
       switch (neurons[i].activation_function) {
@@ -388,10 +521,38 @@ void brain::evaluate_recurrent(const std::vector<exfloat> &input,
         break;
       }
 
+      // Mark this output/hidden neuron as having activated so outputs_ready()
+      // can terminate the settling loop. The count is normalized back to a
+      // single per-call (per-timestep) advance after the loop (see below) so it
+      // doubles as the t-1/t-2 temporal gate without inflating it per pass.
       neurons[i].activation_count += 1.0f;
     }
 
     onetime = true;
+    passes_done++;
+  }
+
+  // Advance temporal activation history exactly ONCE per evaluate() call (one
+  // item/timestep), regardless of how many settling passes ran above. Doing
+  // this per-pass (the old behavior) corrupted t-1/t-2 delays by folding
+  // intra-call settling into the recurrence history. Reference: rtNEAT
+  // network.cpp:213-214 shifts history once per network activation.
+  //   * prev_value[i] is this neuron's value at call entry == the PREVIOUS
+  //     timestep's output, so it becomes the new last_activation (t-1).
+  //   * the old last_activation (the timestep before that) slides to
+  //     last_activation2 (t-2).
+  //   * activation_count is normalized to prev + 1 so it counts real timesteps,
+  //     not settling passes -- the in-loop increments above only existed to let
+  //     outputs_ready() terminate the loop. This keeps the time-delayed gate
+  //     (prev_activation_count > 1) meaning "two real timesteps have elapsed".
+  // A time-delayed edge reading prev_last_activation/prev_activation_count on
+  // the NEXT call therefore sees a true t-2 value.
+  for (size_t i = 0; i < neurons.size(); i++) {
+    if (neurons[i].type == INPUT || neurons[i].type == BIAS) continue;
+    if (neurons[i].in_connections.empty()) continue;
+    neurons[i].last_activation2 = prev_last_activation[i];
+    neurons[i].last_activation = prev_value[i];
+    neurons[i].activation_count = prev_activation_count[i] + 1.0f;
   }
 
   // Apply Hebbian learning if enabled (once after all activations)
@@ -624,6 +785,32 @@ bool brain::outputs_ready() const {
     }
   }
   return true;
+}
+
+// Lamarckian Hebbian write-back: copy learned connection weights back into the
+// matching enabled genes of g. Match on the originating gene innovation number
+// (recorded on each connection at operator=(genome)), which gives a guaranteed
+// 1:1 connection<->gene mapping even when the genome holds parallel edges (two
+// enabled genes sharing the same (from_node,to_node) but with distinct
+// innovation numbers). Only weight is written; innovation numbers / enabled /
+// structure / traits / node ids are preserved.
+void brain::write_back_to(genome &g) const {
+  if (g.genes.empty()) return;
+
+  // g.genes is keyed by innovation number, so the match is a direct O(log n)
+  // lookup per connection -- no by-pair map needed and no parallel-edge collapse.
+  for (const auto &n : neurons) {
+    for (const auto &conn : n.in_connections) {
+      // Skip connections whose originating gene innovation is unknown
+      // (e.g. deserialized from disk before this field was recorded).
+      if (conn.innovation_num == SIZE_MAX) continue;
+      auto it = g.genes.find(conn.innovation_num);
+      if (it == g.genes.end()) continue;  // gene no longer present
+      if (!it->second.enabled) continue;  // never touch disabled genes
+      // Copy ONLY the weight; leave innovation_num, enabled, traits, etc. intact.
+      it->second.weight = conn.weight;
+    }
+  }
 }
 
 // Debug: Get fingerprint of brain structure and weights

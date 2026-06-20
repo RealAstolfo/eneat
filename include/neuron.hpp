@@ -2,6 +2,7 @@
 #define ENEAT_NEURON_HPP
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <utility>
 #include <vector>
@@ -27,6 +28,18 @@ struct neuron_connection {
   size_t trait_id = 0;        // Trait for Hebbian learning (0 = no trait)
   bool is_recurrent = false;  // Recurrent connection flag
   bool is_time_delayed = false;  // Time-delayed recurrent (uses last_activation2)
+
+  // Originating gene node ids (genome from_node/to_node), so the learned weight
+  // can be written back to the matching genome gene (Lamarckian Hebbian).
+  // SIZE_MAX means "unknown" (e.g. connection deserialized from disk).
+  size_t src_node = SIZE_MAX;  // gene.from_node that produced this connection
+  size_t dst_node = SIZE_MAX;  // gene.to_node that produced this connection
+
+  // Originating gene innovation number, so the learned weight can be written
+  // back to the EXACT gene even when a genome holds parallel edges (two enabled
+  // genes with the same (from_node,to_node) but distinct innovation numbers).
+  // SIZE_MAX means "unknown" (e.g. connection deserialized from disk).
+  size_t innovation_num = SIZE_MAX;  // gene.innovation_num that produced this connection
 
   // Trait-derived parameters for this link (copied from trait on network build)
   static constexpr size_t NUM_TRAIT_PARAMS = 8;

@@ -88,6 +88,14 @@ struct pool {
   // Update a genome's fitness by indices (thread-safe)
   void set_genome_fitness(size_t species_idx, size_t genome_idx, size_t fitness);
 
+  // Lamarckian Hebbian write-back: copy ONLY the weights of enabled genes from
+  // a learned genome into the stored population genome (matched by innovation
+  // number, and only when the stored gene is enabled). Structure, innovation
+  // numbers, enabled flags, traits and fitness/age atomics are left untouched.
+  // Mirrors set_genome_fitness locking (genomes.modify).
+  void set_genome_weights(size_t species_idx, size_t genome_idx,
+                          const genome &learned);
+
   // Increment a genome's time_alive by indices (thread-safe)
   void increment_genome_age(size_t species_idx, size_t genome_idx);
 

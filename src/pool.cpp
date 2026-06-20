@@ -102,6 +102,30 @@ void pool::set_genome_fitness(size_t species_idx, size_t genome_idx, size_t fitn
   update_best_genome(copy);
 }
 
+void pool::set_genome_weights(size_t species_idx, size_t genome_idx,
+                              const genome &learned) {
+  auto it = species.begin();
+  std::advance(it, species_idx);
+  if (it == species.end()) return;
+  it->genomes.modify([&](std::vector<genome>& g) {
+    if (genome_idx >= g.size()) return;
+    genome &stored = g[genome_idx];
+    // Copy only the weights of enabled genes. Match by innovation number (the
+    // map key, identical between the by-value learned copy and the stored
+    // genome). Require the stored gene be enabled and the node-id pair to match
+    // so structure/innovation can never be corrupted.
+    for (const auto &[innov, lg] : learned.genes) {
+      if (!lg.enabled) continue;
+      auto sit = stored.genes.find(innov);
+      if (sit == stored.genes.end()) continue;
+      gene &sg = sit->second;
+      if (!sg.enabled) continue;  // never modify disabled genes
+      if (sg.from_node != lg.from_node || sg.to_node != lg.to_node) continue;
+      sg.weight = lg.weight;  // ONLY the weight changes
+    }
+  });
+}
+
 void pool::increment_genome_age(size_t species_idx, size_t genome_idx) {
   auto it = species.begin();
   std::advance(it, species_idx);
